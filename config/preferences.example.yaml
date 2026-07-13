@@ -1,0 +1,43 @@
+# Copy this file to config/preferences.yaml and fill in your own values.
+# The real preferences.yaml is gitignored — it contains personal details
+# (location, work authorization) that shouldn't be published.
+
+target_titles:
+  - "Forward Deployed Engineer"
+  - "Senior Software Engineer"
+  - "Staff Software Engineer"
+
+remote_only: true
+
+# Candidate constraints — fed to matching and gap analysis so scoring reflects
+# what you can actually accept.
+candidate:
+  location: "City, Country"
+  work_authorization: "e.g. Authorized to work in X; needs sponsorship for Y"
+  open_to: "e.g. Remote worldwide; on-site only with visa sponsorship"
+
+# Adzuna country codes to search (us, gb, de, nl, fr, etc.)
+countries:
+  - us
+  - gb
+  - de
+
+min_salary_usd: 0
+
+# Jobs whose title contains none of these words are skipped at match time
+# (no LLM call). Keeps non-engineering noise out of rankings.
+title_filter_keywords:
+  - engineer
+  - engineering
+  - developer
+  - architect
+  - sre
+  - devops
+  - swe
+
+excluded_companies: []
+
+# Greenhouse/Lever board tokens to poll, e.g. "stripe" -> boards-api.greenhouse.io/v1/boards/stripe/jobs
+ats_boards:
+  greenhouse: []
+  lever: []

@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+
+# SQLite database + WAL sidecar files
+*.db
+*.db-wal
+*.db-shm
+
+# Personal data — never publish
+output/
+resumes/*
+!resumes/.gitkeep
+MORNING_SUMMARY.md
+config/preferences.yaml
+
+# Frontend
+node_modules/
+web/dist/
+
+# Tooling
+.claude/
+.DS_Store
+*.egg-info/
