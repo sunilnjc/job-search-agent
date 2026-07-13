@@ -310,7 +310,8 @@
   color: white;
 }
 
-.eligibility-restricted {
+.eligibility-restricted,
+.eligibility-no-sponsorship {
   background: #616161;
   color: white;
 }

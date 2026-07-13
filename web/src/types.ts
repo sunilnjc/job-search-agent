@@ -10,7 +10,13 @@ export const STATUSES = [
 
 export type Status = (typeof STATUSES)[number];
 
-export type Eligibility = "worldwide" | "sponsors" | "restricted" | "unknown" | "title-filtered";
+export type Eligibility =
+  | "worldwide"
+  | "sponsors"
+  | "restricted"
+  | "no-sponsorship"
+  | "unknown"
+  | "title-filtered";
 
 export interface Job {
   id: number;

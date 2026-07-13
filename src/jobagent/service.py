@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from jobagent.config import settings
-from jobagent.matching.eligibility import classify
+from jobagent.matching.eligibility import classify, needs_unavailable_sponsorship
 from jobagent.matching.embeddings import cosine_similarity, embed
 from jobagent.matching.ollama_rank import rank_job
 from jobagent.models import MatchScore
@@ -59,9 +59,9 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print) -> N
     db.init_db()
     profile = parse_resume()
     resume_embedding = embed(profile.raw_text)
-    title_keywords = [
-        kw.lower() for kw in settings.load_preferences().get("title_filter_keywords", [])
-    ]
+    prefs = settings.load_preferences()
+    title_keywords = [kw.lower() for kw in prefs.get("title_filter_keywords", [])]
+    blocked_countries = prefs.get("sponsorship_required_countries", [])
 
     with db.connection() as conn:
         jobs = db.list_jobs_without_score(conn)
@@ -88,6 +88,24 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print) -> N
                     MatchScore(job_id=job["id"], embedding_similarity=0.0, eligibility=eligibility),
                 )
                 on_progress(f"  [{job['id']}] {job['title']} @ {job['company']} — skipped (restricted)")
+                continue
+
+            # On-site roles in countries needing sponsorship, with no sponsorship signal:
+            # score them (in case the user restores one) but auto-file into Excluded.
+            country = job["country"] if "country" in job.keys() else None
+            if needs_unavailable_sponsorship(
+                job["location"], country, bool(job["remote"]), eligibility, blocked_countries
+            ):
+                db.save_match_score(
+                    conn,
+                    MatchScore(job_id=job["id"], embedding_similarity=0.0, eligibility="no-sponsorship"),
+                )
+                db.set_excluded(
+                    conn, job["id"], "On-site role in a no-authorization country; no visa sponsorship mentioned"
+                )
+                on_progress(
+                    f"  [{job['id']}] {job['title']} @ {job['company']} — auto-excluded (on-site, no sponsorship)"
+                )
                 continue
 
             job_embedding = embed(job["description"] or job["title"])

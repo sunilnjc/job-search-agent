@@ -6,6 +6,7 @@ const ELIGIBILITY_LABEL: Record<string, string> = {
   worldwide: "REMOTE ANYWHERE",
   sponsors: "SPONSORS VISA",
   restricted: "RESTRICTED",
+  "no-sponsorship": "NO SPONSORSHIP",
   "title-filtered": "FILTERED",
   unknown: "UNKNOWN",
 };

@@ -16,6 +16,10 @@ candidate:
   work_authorization: "e.g. Authorized to work in X; needs sponsorship for Y"
   open_to: "e.g. Remote worldwide; on-site only with visa sponsorship"
 
+# On-site jobs in these countries are auto-excluded at match time unless the posting
+# explicitly mentions visa sponsorship or being remote-from-anywhere.
+sponsorship_required_countries: []
+
 # Adzuna country codes to search (us, gb, de, nl, fr, etc.)
 countries:
   - us

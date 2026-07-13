@@ -53,3 +53,45 @@ def classify(text: str) -> str:
         if re.search(pattern, lowered):
             return "restricted"
     return "unknown"
+
+
+# Fallback country inference from the free-text location, for rows fetched before
+# the jobs.country column existed (only new Adzuna fetches populate it directly).
+COUNTRY_KEYWORDS = {
+    "US": [
+        "united states", "usa", ", us", "county", "texas", "california", "new york",
+        "washington", "florida", "illinois", "massachusetts", "georgia", "colorado",
+        "oregon", "virginia", "pennsylvania", "ohio", "michigan", "d.c.", "boston",
+        "san francisco", "seattle", "chicago", "austin", "dallas", "houston", "atlanta",
+    ],
+    "GB": [
+        "united kingdom", "uk", "england", "scotland", "wales", "northern ireland",
+        "london", "manchester", "birmingham", "edinburgh", "belfast", "glasgow",
+    ],
+    "DE": [
+        "germany", "deutschland", "münchen", "munich", "berlin", "frankfurt", "hamburg",
+        "köln", "cologne", "nordrhein", "bayern", "baden-württemberg", "hessen",
+        "niedersachsen", "rheinland", "sachsen",
+    ],
+}
+
+
+def infer_country(location: str, country: str | None) -> str | None:
+    if country:
+        return country.upper()
+    loc = location.lower()
+    for code, keywords in COUNTRY_KEYWORDS.items():
+        if any(kw in loc for kw in keywords):
+            return code
+    return None
+
+
+def needs_unavailable_sponsorship(
+    location: str, country: str | None, remote: bool, eligibility: str, blocked_countries: list[str]
+) -> bool:
+    """True for on-site roles in countries where the candidate has no work authorization
+    and the posting shows no sponsorship/remote-anywhere signal — not worth applying to."""
+    if remote or eligibility in ("sponsors", "worldwide"):
+        return False
+    inferred = infer_country(location, country)
+    return inferred is not None and inferred in {c.upper() for c in blocked_countries}
