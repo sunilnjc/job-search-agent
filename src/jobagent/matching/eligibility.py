@@ -76,9 +76,30 @@ COUNTRY_KEYWORDS = {
 }
 
 
-def infer_country(location: str, country: str | None) -> str | None:
+# Adzuna serves each country from its own domain, which is a far more reliable country
+# signal than parsing free-text city names ("Grand Central, Manhattan", bare "US", etc.).
+ADZUNA_DOMAIN_TO_COUNTRY = {
+    "co.uk": "GB",
+    "com": "US",
+    "de": "DE",
+    "nl": "NL",
+    "fr": "FR",
+    "es": "ES",
+    "it": "IT",
+    "at": "AT",
+    "be": "BE",
+    "ch": "CH",
+    "pl": "PL",
+}
+
+
+def infer_country(location: str, country: str | None, url: str | None = None) -> str | None:
     if country:
         return country.upper()
+    if url:
+        m = re.search(r"adzuna\.(co\.uk|com|de|nl|fr|es|it|at|be|ch|pl)\b", url)
+        if m:
+            return ADZUNA_DOMAIN_TO_COUNTRY[m.group(1)]
     loc = location.lower()
     for code, keywords in COUNTRY_KEYWORDS.items():
         if any(kw in loc for kw in keywords):
@@ -87,11 +108,16 @@ def infer_country(location: str, country: str | None) -> str | None:
 
 
 def needs_unavailable_sponsorship(
-    location: str, country: str | None, remote: bool, eligibility: str, blocked_countries: list[str]
+    location: str,
+    country: str | None,
+    remote: bool,
+    eligibility: str,
+    blocked_countries: list[str],
+    url: str | None = None,
 ) -> bool:
     """True for on-site roles in countries where the candidate has no work authorization
     and the posting shows no sponsorship/remote-anywhere signal — not worth applying to."""
     if remote or eligibility in ("sponsors", "worldwide"):
         return False
-    inferred = infer_country(location, country)
+    inferred = infer_country(location, country, url)
     return inferred is not None and inferred in {c.upper() for c in blocked_countries}

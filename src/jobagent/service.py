@@ -24,6 +24,38 @@ EMBEDDING_SIMILARITY_FLOOR = 0.2
 ProgressFn = Callable[[str], None]
 
 
+def apply_sponsorship_exclusions(conn, on_progress: ProgressFn = print) -> int:
+    """Auto-exclude on-site jobs in no-authorization countries (no sponsorship signal).
+
+    Runs independently of scoring so freshly-fetched jobs are filtered off the board
+    immediately, without waiting for an expensive match run. Only touches new/matched
+    jobs not already excluded — never disturbs drafted/applied jobs.
+    """
+    blocked = settings.load_preferences().get("sponsorship_required_countries", [])
+    if not blocked:
+        return 0
+    reason = "On-site role in a no-authorization country; no visa sponsorship mentioned"
+    rows = conn.execute(
+        """
+        SELECT j.id, j.location, j.remote, j.country, j.url,
+               COALESCE(m.eligibility, 'unknown') AS eligibility
+        FROM jobs j LEFT JOIN match_scores m ON j.id = m.job_id
+        WHERE j.status IN ('new', 'matched') AND j.excluded_reason IS NULL
+        """
+    ).fetchall()
+    ids = [
+        r["id"]
+        for r in rows
+        if needs_unavailable_sponsorship(
+            r["location"], r["country"], bool(r["remote"]), r["eligibility"], blocked, r["url"]
+        )
+    ]
+    if ids:
+        conn.executemany("UPDATE jobs SET excluded_reason = ? WHERE id = ?", [(reason, i) for i in ids])
+        on_progress(f"Auto-excluded {len(ids)} on-site jobs in {', '.join(blocked)} (no sponsorship).")
+    return len(ids)
+
+
 def run_fetch(url: Optional[str] = None, on_progress: ProgressFn = print) -> int:
     """Pull job postings from all configured sources, or a single manually-found URL.
 
@@ -50,6 +82,7 @@ def run_fetch(url: Optional[str] = None, on_progress: ProgressFn = print) -> int
                 db.upsert_job(conn, posting)
             on_progress(f"[{source.name}] fetched {len(postings)} postings")
             total += len(postings)
+        apply_sponsorship_exclusions(conn, on_progress)
     on_progress(f"Done. {total} postings processed.")
     return total
 
@@ -94,7 +127,7 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print) -> N
             # score them (in case the user restores one) but auto-file into Excluded.
             country = job["country"] if "country" in job.keys() else None
             if needs_unavailable_sponsorship(
-                job["location"], country, bool(job["remote"]), eligibility, blocked_countries
+                job["location"], country, bool(job["remote"]), eligibility, blocked_countries, job["url"]
             ):
                 db.save_match_score(
                     conn,
