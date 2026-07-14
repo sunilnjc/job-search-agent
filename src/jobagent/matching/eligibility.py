@@ -110,14 +110,20 @@ def infer_country(location: str, country: str | None, url: str | None = None) ->
 def needs_unavailable_sponsorship(
     location: str,
     country: str | None,
-    remote: bool,
+    remote: bool,  # noqa: ARG001 - kept for signature stability; see note below
     eligibility: str,
     blocked_countries: list[str],
     url: str | None = None,
 ) -> bool:
-    """True for on-site roles in countries where the candidate has no work authorization
-    and the posting shows no sponsorship/remote-anywhere signal — not worth applying to."""
-    if remote or eligibility in ("sponsors", "worldwide"):
+    """True for roles in countries where the candidate has no work authorization and the
+    posting shows no sponsorship / remote-from-anywhere signal — not worth applying to.
+
+    Note: a "remote" flag does NOT rescue a blocked-country job. A US or UK posting marked
+    remote almost always means remote *within that country*, which still requires local
+    work authorization. Only an explicit worldwide-remote or sponsorship signal (captured
+    as eligibility 'worldwide'/'sponsors') keeps a blocked-country job on the board.
+    """
+    if eligibility in ("sponsors", "worldwide"):
         return False
     inferred = infer_country(location, country, url)
     return inferred is not None and inferred in {c.upper() for c in blocked_countries}

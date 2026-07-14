@@ -58,12 +58,32 @@ ollama pull nomic-embed-text
 jobagent fetch                      # pull from all configured sources
 jobagent fetch --url <job-url>      # add a single manually-found posting (LinkedIn/Indeed)
 jobagent match [--limit N]          # score fetched jobs against your resume
+jobagent prepare [--top N]          # fetch + match + draft the top N new matches (default 3)
 jobagent review                     # list top-ranked unreviewed jobs
 jobagent gaps <job_id>              # missing requirements/keywords vs a posting, before you apply
 jobagent draft <job_id>             # generate cover letter + tailored resume bullets
 jobagent status                     # list jobs by pipeline stage
 jobagent status <job_id> <stage>    # update a job's pipeline stage
 ```
+
+## Daily automation (macOS)
+
+`jobagent prepare` runs the whole pipeline hands-off: it fetches new jobs, matches
+them, and drafts full application materials (cover letter + tailored resume PDF + gap
+analysis) for the top N new matches — leaving a ready-to-review queue in the "drafted"
+column. **It never submits anything; you review each and submit yourself.**
+
+To run it automatically every morning, install the launchd schedule (runs at 07:00 daily,
+and at next wake if the Mac was asleep):
+
+```bash
+cp scripts/com.sunilnjc.jobagent.prepare.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.sunilnjc.jobagent.prepare.plist
+```
+
+Output is logged to `logs/prepare.log`. Requires the Ollama app running (used for
+embeddings) — it starts at login, so being logged in is enough. To stop:
+`launchctl unload ~/Library/LaunchAgents/com.sunilnjc.jobagent.prepare.plist`.
 
 ## Web UI
 

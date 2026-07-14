@@ -6,7 +6,7 @@ import typer
 
 from jobagent.config import settings
 from jobagent.profile.resume_parser import parse_resume
-from jobagent.service import run_fetch, run_match, slugify
+from jobagent.service import run_fetch, run_match, run_prepare, slugify
 from jobagent.storage import db
 from jobagent.tracking import pipeline
 from jobagent.drafting.cover_letter import build_cover_letter_pdf, draft_cover_letter
@@ -31,6 +31,12 @@ def fetch(url: Optional[str] = typer.Option(None, "--url", help="Fetch a single 
 def match(limit: Optional[int] = typer.Option(None, "--limit", help="Only score this many unscored jobs")):
     """Score fetched jobs against your resume: embedding prefilter + Ollama fit rating."""
     run_match(limit, on_progress=typer.echo)
+
+
+@app.command()
+def prepare(top: int = typer.Option(3, "--top", help="How many top new matches to draft materials for")):
+    """Hands-off daily prep: fetch + match + draft the top N new matches for review."""
+    run_prepare(top, on_progress=typer.echo)
 
 
 @app.command()

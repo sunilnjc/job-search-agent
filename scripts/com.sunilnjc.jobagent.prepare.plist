@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sunilnjc.jobagent.prepare</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/Sunil/2026/agents/job-search-agent/.venv/bin/jobagent</string>
+        <string>prepare</string>
+        <string>--top</string>
+        <string>3</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent</string>
+
+    <!-- Run every day at 07:00. launchd runs it at the next wake if the Mac was
+         asleep at 07:00 (so a missed morning still gets picked up). -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent/logs/prepare.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent/logs/prepare.err.log</string>
+</dict>
+</plist>
