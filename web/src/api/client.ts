@@ -44,7 +44,7 @@ export const api = {
     request<RunStatus>("/api/runs/match", { method: "POST", body: JSON.stringify({ limit }) }),
   getRun: (runId: string) => request<RunStatus>(`/api/runs/${runId}`),
   chat: (id: number, messages: ChatMessage[]) =>
-    request<{ reply: string }>(`/api/jobs/${id}/chat`, {
+    request<{ reply: string; materials_updated: boolean }>(`/api/jobs/${id}/chat`, {
       method: "POST",
       body: JSON.stringify({ messages }),
     }),

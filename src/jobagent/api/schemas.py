@@ -51,6 +51,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    materials_updated: bool = False
 
 
 class RunTrigger(BaseModel):

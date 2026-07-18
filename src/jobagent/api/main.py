@@ -18,7 +18,7 @@ from jobagent.api.schemas import (
     StatusUpdate,
 )
 from jobagent.config import settings
-from jobagent.drafting.application_chat import answer_application_question, build_system_prompt
+from jobagent.drafting.application_chat import build_system_prompt, run_application_chat
 from jobagent.drafting.cover_letter import build_cover_letter_pdf, draft_cover_letter
 from jobagent.drafting.gap_analysis import analyze_gaps
 from jobagent.drafting.resume_builder import (
@@ -265,10 +265,18 @@ def application_chat(job_id: int, body: ChatRequest):
         cover_letter=_read_artifact(job, "cover_letter.md"),
         resume_tailoring=_read_artifact(job, "resume_tailoring.md"),
     )
-    reply = answer_application_question(
-        system_prompt, [m.model_dump() for m in body.messages]
+
+    out_dir = settings.output_dir / slugify(f"{job['company']}-{job['title']}")
+
+    def apply_cover_letter(new_text: str) -> None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "cover_letter.md").write_text(new_text)
+        build_cover_letter_pdf(new_text, out_dir / "cover_letter.pdf")
+
+    reply, updated = run_application_chat(
+        system_prompt, [m.model_dump() for m in body.messages], apply_cover_letter
     )
-    return ChatResponse(reply=reply)
+    return ChatResponse(reply=reply, materials_updated=updated)
 
 
 @app.get("/api/status/summary")
