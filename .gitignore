@@ -24,3 +24,7 @@ web/dist/
 .DS_Store
 *.egg-info/
 logs/
+
+# Local browser authentication/profile used by the application autopilot.
+playwright/.auth/
+playwright/profile/

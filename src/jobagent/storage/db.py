@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS match_scores (
     eligibility TEXT NOT NULL DEFAULT 'unknown',
     scored_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS telegram_notifications (
+    job_id INTEGER PRIMARY KEY REFERENCES jobs(id),
+    notified_at TEXT NOT NULL
+);
 """
 
 
@@ -181,3 +186,56 @@ def list_jobs_with_scores(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         ORDER BY match_scores.llm_score DESC, jobs.id DESC
         """
     ).fetchall()
+
+
+def telegram_candidates(
+    conn: sqlite3.Connection,
+    min_score: int,
+    limit: int = 5,
+    only_unnotified: bool = False,
+) -> list[sqlite3.Row]:
+    """Return only actionable, sponsorship-compatible jobs for the private bot.
+
+    The bot must never surface a role already excluded by the eligibility workflow or one that
+    needs US/UK work authorization without explicit sponsorship/worldwide eligibility.
+
+    Eligibility is filtered by *excluding the known-bad* rather than requiring a known-good tag.
+    `apply_sponsorship_exclusions` has already removed roles that need work authorization Sunil
+    doesn't have, so anything still un-excluded has passed that screen. Requiring an explicit
+    'worldwide'/'sponsors' tag instead would surface almost nothing: the classifier can only set
+    those when a posting spells it out, and most descriptions (Adzuna especially) are truncated
+    snippets, leaving ~99% of the queue tagged 'unknown'. Explicitly sponsoring roles are still
+    ranked first below.
+    """
+    unseen_clause = "AND telegram_notifications.job_id IS NULL" if only_unnotified else ""
+    return conn.execute(
+        f"""
+        SELECT jobs.*, match_scores.llm_score, match_scores.llm_reasoning,
+               match_scores.embedding_similarity, match_scores.eligibility
+        FROM jobs
+        JOIN match_scores ON jobs.id = match_scores.job_id
+        LEFT JOIN telegram_notifications ON jobs.id = telegram_notifications.job_id
+        WHERE jobs.excluded_reason IS NULL
+          AND jobs.status IN ('drafted', 'matched')
+          AND match_scores.llm_score >= ?
+          AND match_scores.eligibility NOT IN ('restricted', 'no-sponsorship')
+          {unseen_clause}
+        ORDER BY CASE WHEN match_scores.eligibility IN ('worldwide', 'sponsors') THEN 0 ELSE 1 END,
+                 CASE jobs.status WHEN 'drafted' THEN 0 ELSE 1 END,
+                 match_scores.llm_score DESC,
+                 match_scores.embedding_similarity DESC
+        LIMIT ?
+        """,
+        (min_score, limit),
+    ).fetchall()
+
+
+def mark_telegram_notified(conn: sqlite3.Connection, job_id: int) -> None:
+    conn.execute(
+        """
+        INSERT INTO telegram_notifications (job_id, notified_at)
+        VALUES (?, ?)
+        ON CONFLICT(job_id) DO UPDATE SET notified_at = excluded.notified_at
+        """,
+        (job_id, now_iso()),
+    )

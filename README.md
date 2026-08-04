@@ -22,6 +22,57 @@ tailored application materials, and track application status.
 This tool never auto-submits applications anywhere — drafts are for you to review and
 submit yourself.
 
+## Private Telegram companion
+
+The optional Telegram companion is a private mobile control surface: it sends high-score roles
+that survived the eligibility screen, can deliver that job's cover letter and tailored resume
+straight into the chat, opens the existing private PWA for full document review, and lets you
+mark a job applied or exclude it. It does **not** send API keys through Telegram and it does
+**not** silently submit applications on external sites.
+
+Eligibility is enforced by *excluding* roles that need work authorization you don't have — the
+same screen `jobagent match` applies — rather than by requiring a posting to explicitly advertise
+sponsorship. Most descriptions never say either way (Adzuna serves truncated snippets), so
+demanding an explicit "we sponsor" tag would filter the queue down to almost nothing. Roles that
+*do* advertise sponsorship or worldwide-remote are ranked first.
+
+1. Create a bot with `@BotFather`, then add its token to the local `.env`:
+
+   ```bash
+   TELEGRAM_BOT_TOKEN=...
+   TELEGRAM_DASHBOARD_URL=http://your-tailscale-ip:8842
+   ```
+
+2. Start the bot once and message it `/start`. It will reply with your private chat ID:
+
+   ```bash
+   jobagent telegram run
+   # add the returned value to .env as TELEGRAM_ALLOWED_CHAT_ID=...
+   ```
+
+3. Install the two local launch agents after the chat ID is configured:
+
+   ```bash
+   cp scripts/com.sunilnjc.jobagent.telegram.plist ~/Library/LaunchAgents/
+   cp scripts/com.sunilnjc.jobagent.telegram-notify.plist ~/Library/LaunchAgents/
+   launchctl load ~/Library/LaunchAgents/com.sunilnjc.jobagent.telegram.plist
+   launchctl load ~/Library/LaunchAgents/com.sunilnjc.jobagent.telegram-notify.plist
+   ```
+
+The bot uses long polling, so it needs no public webhook or additional exposed port. It accepts
+commands and buttons only from `TELEGRAM_ALLOWED_CHAT_ID`. Use `/today`, `/matches`, and `/status`
+from Telegram; the daily notification runs at 07:20 after the existing morning preparation task.
+
+Each job card carries **📄 Send documents**, which uploads that role's `cover_letter.pdf` and
+`tailored_resume.pdf` into the chat — useful when you want to read them on the phone without the
+dashboard. The button only appears once those files have actually been drafted.
+
+After changing bot code, restart the running agent so it picks the change up:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.sunilnjc.jobagent.telegram
+```
+
 ## LinkedIn / Indeed
 
 These sites disallow bulk scraping in their Terms of Service. Instead of scraping search

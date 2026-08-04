@@ -17,6 +17,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "PyYAML>=6.0",
     "reportlab>=4.0",
+    # Python 3.9-compatible browser automation runtime for the local application autopilot.
+    "playwright>=1.49,<1.50",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sunilnjc.jobagent.telegram-notify</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/Sunil/2026/agents/job-search-agent/.venv/bin/jobagent</string>
+        <string>telegram</string>
+        <string>notify</string>
+        <string>--limit</string>
+        <string>5</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent</string>
+    <!-- Runs after the 07:00 prepare job, leaving it time to fetch, match, and draft. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>20</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent/logs/telegram-notify.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent/logs/telegram-notify.err.log</string>
+</dict>
+</plist>

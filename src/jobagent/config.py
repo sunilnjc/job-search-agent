@@ -30,6 +30,12 @@ class Settings:
         self.rank_provider = os.getenv("RANK_PROVIDER", "ollama")
         self.openai_rank_model = os.getenv("OPENAI_RANK_MODEL", "gpt-4o-mini")
         self.ollama_embed_model = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+        # Telegram is intentionally opt-in. The bot will not send or accept application
+        # actions until both the token and the owner's private chat ID are configured.
+        self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.telegram_allowed_chat_id = os.getenv("TELEGRAM_ALLOWED_CHAT_ID", "")
+        self.telegram_dashboard_url = os.getenv("TELEGRAM_DASHBOARD_URL", "").rstrip("/")
+        self.telegram_min_score = int(os.getenv("TELEGRAM_MIN_SCORE", "8"))
 
     def load_preferences(self) -> dict:
         if not self.preferences_path.exists():

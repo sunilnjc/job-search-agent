@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sunilnjc.jobagent.telegram</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/Sunil/2026/agents/job-search-agent/.venv/bin/jobagent</string>
+        <string>telegram</string>
+        <string>run</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent/logs/telegram.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent/logs/telegram.err.log</string>
+</dict>
+</plist>

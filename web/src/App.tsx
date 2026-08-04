@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useJobs } from "./hooks/useJobs";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { KanbanBoard } from "./components/KanbanBoard";
@@ -31,6 +31,21 @@ function App() {
   const isMobile = useIsMobile();
 
   const filteredJobs = useMemo(() => (jobs ? applyFilters(jobs, filters) : undefined), [jobs, filters]);
+
+  // Telegram's private "Review packet" button opens the existing PWA on the exact job.
+  // Keep this query-string based so it also works without a client-side router.
+  useEffect(() => {
+    const value = new URLSearchParams(window.location.search).get("job");
+    const jobId = value ? Number(value) : Number.NaN;
+    if (Number.isInteger(jobId) && jobId > 0) setOpenJobId(jobId);
+  }, []);
+
+  const closeJob = () => {
+    setOpenJobId(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("job");
+    window.history.replaceState({}, "", url);
+  };
 
   return (
     <div className="app">
@@ -74,7 +89,7 @@ function App() {
       {filteredJobs && view === "excluded" && (isMobile ? <MobileExcluded jobs={filteredJobs} onOpenJob={setOpenJobId} /> : <ExcludedList jobs={filteredJobs} onOpenJob={setOpenJobId} />)}
 
       {openJobId !== null && (
-        <JobDetailModal jobId={openJobId} onClose={() => setOpenJobId(null)} />
+        <JobDetailModal jobId={openJobId} onClose={closeJob} />
       )}
 
       {isMobile && <MobileNavigation view={view} onChange={setView} />}

@@ -19,6 +19,8 @@ from jobagent.drafting.resume_builder import (
 from jobagent.drafting.resume_tailor import draft_resume_tailoring
 
 app = typer.Typer(help="Personal job search agent: fetch, match, draft, track.")
+telegram_app = typer.Typer(help="Private Telegram companion for mobile job review.")
+app.add_typer(telegram_app, name="telegram")
 
 
 @app.command()
@@ -126,6 +128,23 @@ def status(job_id: Optional[int] = typer.Argument(None), new_status: Optional[st
         counts = pipeline.summarize(conn)
         for stage, count in counts.items():
             typer.echo(f"{stage:15s} {count}")
+
+
+@telegram_app.command("run")
+def telegram_run():
+    """Run the private bot using long polling (no public webhook required)."""
+    from jobagent.telegram_bot import TelegramBot
+
+    TelegramBot().run_forever()
+
+
+@telegram_app.command("notify")
+def telegram_notify(limit: int = typer.Option(5, "--limit", help="Maximum new matches to send")):
+    """Send newly eligible, high-score matches to the approved Telegram chat."""
+    from jobagent.telegram_bot import TelegramBot
+
+    sent = TelegramBot().notify_new_matches(limit=limit)
+    typer.echo(f"Sent {sent} Telegram job notification(s).")
 
 
 if __name__ == "__main__":
