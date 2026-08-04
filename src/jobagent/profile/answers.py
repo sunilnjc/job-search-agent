@@ -122,6 +122,41 @@ def years_for_skill(skill: str, data: Optional[dict] = None) -> Answer:
     return Answer(field=f"experience.years_by_skill.{match}", value=str(skills[match]), label=label)
 
 
+def _iter_leaves(node: Any, path: str = ""):
+    """Yield ``(dotted_path, value)`` for every leaf. Dicts recurse; lists are leaves."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from _iter_leaves(value, f"{path}.{key}" if path else key)
+    else:
+        yield path, node
+
+
+def collect(data: Optional[dict] = None):
+    """Split the answers into ``(approved, needs_input)`` for structured consumers.
+
+    ``approved`` mirrors the config tree with every unfilled leaf replaced by ``None``, so
+    a caller can never render the ``NEEDS_INPUT`` sentinel as though it were a real answer;
+    ``needs_input`` is the list of dotted paths the user still has to supply.
+    """
+    data = load_answers() if data is None else data
+    approved: dict = {}
+    needs_input: list[str] = []
+    if not isinstance(data, dict):
+        return approved, needs_input
+
+    for path, value in _iter_leaves(data):
+        missing = not isinstance(value, list) and _is_missing(value)
+        if missing:
+            needs_input.append(path)
+        parts = path.split(".")
+        node = approved
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = None if missing else value
+
+    return approved, needs_input
+
+
 def approved_facts_block(data: Optional[dict] = None) -> str:
     """Flatten the filled-in answers for use as LLM context.
 
@@ -135,19 +170,15 @@ def approved_facts_block(data: Optional[dict] = None) -> str:
     filled: list[str] = []
     missing: list[str] = []
 
-    def walk(node: Any, path: str) -> None:
-        if isinstance(node, dict):
-            for key, value in node.items():
-                walk(value, f"{path}.{key}" if path else key)
-        elif isinstance(node, list):
-            if node:
-                filled.append(f"- {path}: {', '.join(str(v) for v in node)}")
-        elif _is_missing(node):
+    for path, value in _iter_leaves(data):
+        if isinstance(value, list):
+            if value:
+                filled.append(f"- {path}: {', '.join(str(v) for v in value)}")
+        elif _is_missing(value):
             missing.append(path)
         else:
-            filled.append(f"- {path}: {node}")
+            filled.append(f"- {path}: {value}")
 
-    walk(data, "")
     lines = ["APPROVED FACTS (use these verbatim when a form or question asks for them):"]
     lines.extend(filled or ["- (none configured)"])
     if missing:

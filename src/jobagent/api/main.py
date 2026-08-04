@@ -30,6 +30,7 @@ from jobagent.drafting.resume_builder import (
 )
 from jobagent.drafting.resume_tailor import draft_resume_tailoring
 from jobagent.models import STATUSES
+from jobagent.profile import answers
 from jobagent.profile.resume_parser import parse_resume
 from jobagent.service import slugify
 from jobagent.storage import db
@@ -300,6 +301,17 @@ def application_chat(job_id: int, body: ChatRequest):
         apply_tailored_resume,
     )
     return ChatResponse(reply=reply, materials_updated=updated)
+
+
+@app.get("/api/answers")
+def get_answers():
+    """The pre-approved answer library, plus the fields the user still has to fill in.
+
+    Unfilled fields come back as null with their dotted path listed in `needs_input` — the
+    UI must ask for those rather than showing (or submitting) a guess.
+    """
+    approved, needs_input = answers.collect()
+    return {"answers": approved, "needs_input": needs_input}
 
 
 @app.get("/api/status/summary")
