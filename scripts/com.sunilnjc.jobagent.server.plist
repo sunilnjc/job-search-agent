@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sunilnjc.jobagent.server</string>
+
+    <!-- Keeps the API + web UI reachable (e.g. from the phone over Tailscale)
+         without having to leave a terminal open. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/Sunil/2026/agents/job-search-agent/.venv/bin/uvicorn</string>
+        <string>jobagent.api.main:app</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>8842</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- restart if it ever crashes, so the phone doesn't hit a dead port -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent/logs/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/Sunil/2026/agents/job-search-agent/logs/server.err.log</string>
+</dict>
+</plist>

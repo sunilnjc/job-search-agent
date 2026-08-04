@@ -85,6 +85,21 @@ Output is logged to `logs/prepare.log`. Requires the Ollama app running (used fo
 embeddings) — it starts at login, so being logged in is enough. To stop:
 `launchctl unload ~/Library/LaunchAgents/com.sunilnjc.jobagent.prepare.plist`.
 
+### Keep the server running
+
+For the phone to reach the board at any time, the API server has to be up — not just
+while a terminal is open. A second launchd agent starts it at login and restarts it if
+it ever crashes:
+
+```bash
+cp scripts/com.sunilnjc.jobagent.server.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.sunilnjc.jobagent.server.plist
+```
+
+Logs go to `logs/server.log` / `logs/server.err.log`. Note it starts at *login*, so
+after a reboot the Mac needs to be logged in (not just powered on) for the phone to
+connect.
+
 ## Web UI
 
 A kanban board (columns = pipeline stages) for reviewing matches, triggering
