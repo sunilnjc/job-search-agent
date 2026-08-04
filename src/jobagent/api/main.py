@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from jobagent.api import runs
 from jobagent.api.schemas import (
@@ -32,6 +34,11 @@ from jobagent.profile.resume_parser import parse_resume
 from jobagent.service import slugify
 from jobagent.storage import db
 from jobagent.tracking import pipeline
+
+logger = logging.getLogger(__name__)
+
+# <repo root>/web/dist — main.py lives at <repo root>/src/jobagent/api/main.py
+WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
 app = FastAPI(title="Job Search Agent API")
 
@@ -303,3 +310,40 @@ def get_run_status(run_id: str):
     if not run:
         raise HTTPException(404, f"No run with id {run_id}")
     return RunOut(run_id=run_id, status=run["status"], log=run["log"])
+
+
+# ---------------------------------------------------------------------------
+# Built frontend (web/dist), served from this same process so a phone only needs
+# one host:port. Must stay BELOW every /api route: routes match in definition
+# order, so the catch-all below only ever sees paths the API didn't claim.
+# ---------------------------------------------------------------------------
+
+_index_html = WEB_DIST / "index.html"
+
+if _index_html.is_file():
+    _dist_root = WEB_DIST.resolve()
+
+    if (WEB_DIST / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_spa(full_path: str):
+        """Serve a real file out of web/dist when one exists, else index.html so
+        client-side routes survive a hard reload."""
+        if full_path.startswith("api/"):
+            raise HTTPException(404, "Not found")
+
+        if full_path:
+            candidate = (WEB_DIST / full_path).resolve()
+            # Reject traversal (`..`) escaping web/dist before touching the path.
+            if _dist_root in candidate.parents and candidate.is_file():
+                return FileResponse(candidate)
+
+        return FileResponse(_index_html)
+
+else:
+    logger.warning(
+        "Frontend not built: %s missing. Serving API only — run `npm run build` in web/ "
+        "to enable the single-port UI.",
+        _index_html,
+    )

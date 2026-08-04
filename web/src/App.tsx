@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { useJobs } from "./hooks/useJobs";
+import { useIsMobile } from "./hooks/useIsMobile";
 import { KanbanBoard } from "./components/KanbanBoard";
+import { MobileQueue } from "./components/MobileQueue";
 import { ApplicationsTable } from "./components/ApplicationsTable";
 import { ExcludedList } from "./components/ExcludedList";
 import { ActionBar } from "./components/ActionBar";
@@ -23,6 +25,7 @@ function App() {
   const [openJobId, setOpenJobId] = useState<number | null>(null);
   const [view, setView] = useState<View>("board");
   const [filters, setFilters] = useState<JobFilters>({ roles: new Set(), regions: new Set() });
+  const isMobile = useIsMobile();
 
   const filteredJobs = useMemo(() => (jobs ? applyFilters(jobs, filters) : undefined), [jobs, filters]);
 
@@ -51,7 +54,13 @@ function App() {
       {isLoading && <div className="app-loading">Loading jobs…</div>}
       {error && <div className="app-error">Failed to reach the API: {String(error)}</div>}
 
-      {filteredJobs && view === "board" && <KanbanBoard jobs={filteredJobs} onOpenJob={setOpenJobId} />}
+      {filteredJobs &&
+        view === "board" &&
+        (isMobile ? (
+          <MobileQueue jobs={filteredJobs} onOpenJob={setOpenJobId} />
+        ) : (
+          <KanbanBoard jobs={filteredJobs} onOpenJob={setOpenJobId} />
+        ))}
       {filteredJobs && view === "applications" && (
         <ApplicationsTable jobs={filteredJobs} onOpenJob={setOpenJobId} />
       )}

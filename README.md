@@ -119,3 +119,71 @@ both the `uvicorn` command above and `web/src/api/client.ts`.
 
 **Security note:** there is no authentication. This is fine on a trusted home network
 (the intended use), but do not expose this port to the public internet.
+
+## Access from your phone (Tailscale)
+
+To reach the board from your phone when you're *not* on the home WiFi, use
+[Tailscale](https://tailscale.com) rather than port-forwarding your router.
+
+**Why not port-forwarding / ngrok?** The API has no authentication (see the security
+note above) — anything that can reach port 8842 can read your resume and drafted cover
+letters, and can trigger runs that spend your OpenAI/Anthropic credits. Tailscale builds
+a private WireGuard mesh between *your own* devices: the Mac and the phone get
+`100.x.y.z` addresses that only exist inside your account's network, and nothing is
+published to the public internet. Free tier covers personal use.
+
+**One-time setup — Mac:**
+
+```bash
+brew install --cask tailscale     # installs Tailscale.app (needs your sudo password)
+open -a Tailscale                 # then sign in from the menu-bar icon
+```
+
+Sign in with whatever identity provider you prefer (Google, GitHub, …) — just remember
+which one, the phone has to match. Approve the system extension prompt if macOS asks.
+
+**One-time setup — iPhone:** install **Tailscale** from the App Store, open it, and sign
+in with the **same account** you used on the Mac. Both devices should now be listed in
+each other's device list.
+
+**Find the Mac's Tailscale IP:**
+
+```bash
+tailscale ip -4                   # e.g. 100.101.102.103
+```
+
+(If `tailscale` isn't on your `PATH`, use the full path
+`/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4`, or just read it from the
+menu-bar icon — the Mac's own address is shown at the top of the menu.)
+
+**Then, on the phone:** start the backend on the Mac as usual
+(`uvicorn jobagent.api.main:app --host 0.0.0.0 --port 8842` — `0.0.0.0` matters, it's
+what makes the server listen on the Tailscale interface too) and open
+
+```
+http://100.101.102.103:8842
+```
+
+in Safari, substituting your own address. Port 8842 serves the built frontend as well as
+the API, so that single URL is the whole app — no separate `npm run dev` needed, though
+you do need `web/dist` to exist (`cd web && npm run build`).
+
+**Add it to the home screen:** in Safari, tap **Share** → **Add to Home Screen**. It gets
+an icon and launches full-screen without the browser chrome, like a native app.
+
+**Caveat — the Mac must be awake.** Tailscale doesn't wake a sleeping machine; if the Mac
+at home is asleep, the phone gets a connection error. Either leave it awake via
+**Settings → Lock Screen** (never turn display off / prevent sleep) and **Settings →
+Battery → Options → Prevent automatic sleeping on power adapter**, or keep it up only for
+as long as you need:
+
+```bash
+caffeinate -s        # blocks sleep until you Ctrl-C
+```
+
+**On HTTPS:** Tailscale already encrypts the traffic at the network layer (WireGuard), but
+the browser only sees `http://` and so treats the page as an insecure origin. That means
+no service workers, and therefore no true offline PWA mode — Add to Home Screen still
+works, it just needs the Mac reachable each time. If offline caching becomes worth it
+later, `tailscale serve` can put a real, trusted HTTPS certificate in front of port 8842
+on a `<machine>.<tailnet>.ts.net` hostname.
