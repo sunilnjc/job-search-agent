@@ -1,0 +1,63 @@
+# Pre-approved answers for job application forms.
+#
+# Copy to config/answers.yaml and fill in your own values. The real file is gitignored
+# because it holds personal details (salary, notice period, contact info).
+#
+# RULE: anything left as NEEDS_INPUT is treated as "not answered". Nothing here is ever
+# guessed or inferred — an unfilled field makes the assistant ask you rather than invent
+# a plausible-sounding answer. That is the whole point of this file.
+
+identity:
+  full_name: "Your Name"
+  email: "you@example.com"
+  phone: "+000 000 0000"
+  location: "City, Country"
+  linkedin: "linkedin.com/in/your-handle"
+  github: "github.com/your-handle"
+  portfolio: NEEDS_INPUT
+
+work_authorization:
+  # Be precise and literal here — this is the field most often answered wrongly.
+  summary: "e.g. No US/UK/EU work authorization; requires employer sponsorship"
+  needs_sponsorship: true
+  authorized_countries: ["Country A"]
+  open_to_relocation: true
+  relocation_notes: "e.g. Open to relocating worldwide with sponsorship support"
+
+availability:
+  notice_period: NEEDS_INPUT      # e.g. "30 days"
+  earliest_start_date: NEEDS_INPUT
+  willing_to_travel: NEEDS_INPUT
+
+compensation:
+  # Leave as NEEDS_INPUT unless you're comfortable with a number being auto-filled.
+  current_salary: NEEDS_INPUT
+  expected_salary: NEEDS_INPUT
+  currency: NEEDS_INPUT
+  disclose_current_salary: false  # many jurisdictions make this optional — default to withholding
+
+experience:
+  total_years: 0
+  # Years per technology. Only list what you can defend in an interview.
+  years_by_skill:
+    Java: 0
+    Python: 0
+
+education:
+  highest_degree: "e.g. Bachelor of Engineering, Computer Science"
+  institution: "University"
+  graduation_year: 0
+
+# Free-form answers to recurring narrative questions. Keep them truthful and reusable;
+# the assistant will tailor tone per company but will not invent new facts.
+narratives:
+  why_this_role: NEEDS_INPUT
+  greatest_strength: NEEDS_INPUT
+  reason_for_leaving: NEEDS_INPUT
+
+# Demographic / voluntary questions. "decline" is a valid, common answer.
+voluntary_disclosures:
+  gender: "decline to self-identify"
+  ethnicity: "decline to self-identify"
+  veteran_status: "decline to self-identify"
+  disability_status: "decline to self-identify"

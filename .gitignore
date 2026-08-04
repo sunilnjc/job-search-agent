@@ -14,6 +14,7 @@ resumes/*
 !resumes/.gitkeep
 MORNING_SUMMARY.md
 config/preferences.yaml
+config/answers.yaml
 
 # Frontend
 node_modules/

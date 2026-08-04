@@ -18,6 +18,7 @@ class Settings:
         self.resumes_dir = ROOT / "resumes"
         self.output_dir = ROOT / "output"
         self.preferences_path = ROOT / "config" / "preferences.yaml"
+        self.answers_path = ROOT / "config" / "answers.yaml"
 
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")

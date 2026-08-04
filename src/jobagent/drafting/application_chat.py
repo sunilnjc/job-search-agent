@@ -6,6 +6,7 @@ from typing import Callable
 
 from jobagent.config import settings
 from jobagent.drafting.llm import chat, resolve_provider
+from jobagent.profile.answers import approved_facts_block
 
 SYSTEM_TEMPLATE = """You are Sunilkumar Kalabandi's senior job-search copilot for ONE specific role. \
 Your job is to make every step of this application easier, sharper, and more persuasive. Today's date \
@@ -68,6 +69,12 @@ Location: {location}
 
 === RESUME (source of truth) ===
 {resume_text}
+
+=== PRE-APPROVED ANSWERS (authoritative for form fields) ===
+These were approved by Sunil himself. Use them verbatim when a form or question asks for
+them, instead of writing a placeholder. Anything listed as NOT PROVIDED must be asked
+about — never estimate, infer, or fill it from context.
+{approved_facts}
 
 {supporting_materials}"""
 
@@ -148,6 +155,7 @@ def build_system_prompt(
         location=location,
         job_description=job_description[:4000],
         resume_text=resume_text[:6000],
+        approved_facts=approved_facts_block(),
         supporting_materials=supporting,
     )
 
