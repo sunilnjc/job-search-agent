@@ -8,6 +8,15 @@ interface Props {
   company: string;
 }
 
+const STARTERS = [
+  "Give me a strong 60-second introduction for this role.",
+  "What are my strongest fits and honest gaps for this role?",
+  "Write a concise recruiter outreach message for this position.",
+  "Prepare three likely interview questions with grounded answers.",
+  "Improve my cover letter for this role and make it more specific.",
+  "Refocus my tailored resume on the most relevant experience for this job.",
+];
+
 export function ApplicationChat({ jobId, company }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -37,12 +46,26 @@ export function ApplicationChat({ jobId, company }: Props) {
     send.mutate(next);
   };
 
+  const selectStarter = (prompt: string) => {
+    if (send.isPending) return;
+    setInput(prompt);
+  };
+
   return (
     <div className="chat">
       <div className="chat-intro">
-        Ask about {company}: paste a screening question, or ask me to edit the cover letter
-        (fix the date, shorten it, adjust tone). Everything stays grounded in your resume — nothing invented.
+        Your application copilot for {company}. Ask for answers, interview prep, outreach, company-specific
+        positioning, document rewrites, or strategy. It writes freely, while keeping career claims truthful.
       </div>
+      {messages.length === 0 && (
+        <div className="chat-starters" aria-label="Suggested prompts">
+          {STARTERS.map((starter) => (
+            <button key={starter} onClick={() => selectStarter(starter)} disabled={send.isPending}>
+              {starter}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="chat-messages" ref={scrollRef}>
         {messages.map((m, i) => (
           <div key={i} className={`chat-msg chat-msg-${m.role}`}>
@@ -50,7 +73,7 @@ export function ApplicationChat({ jobId, company }: Props) {
           </div>
         ))}
         {updatedNote && (
-          <div className="chat-updated">✓ Cover letter updated — see the Cover Letter tab.</div>
+          <div className="chat-updated">✓ Application materials updated — open the Cover Letter or Resume Tailoring tab to review and download them.</div>
         )}
         {send.isPending && <div className="chat-msg chat-msg-assistant"><em>Thinking…</em></div>}
         {send.isError && <div className="chat-error">Error: {String(send.error)}</div>}
@@ -58,7 +81,7 @@ export function ApplicationChat({ jobId, company }: Props) {
       <div className="chat-input-row">
         <textarea
           className="chat-input"
-          placeholder="e.g. Update the date on my cover letter, or: highlight my LLM API experience"
+          placeholder="Ask anything about this application — write, analyse, practise, or update my materials…"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -70,7 +93,7 @@ export function ApplicationChat({ jobId, company }: Props) {
           Ask
         </button>
       </div>
-      <div className="chat-hint">⌘/Ctrl + Enter to send</div>
+      <div className="chat-hint">⌘/Ctrl + Enter to send · Review every generated answer before submitting.</div>
     </div>
   );
 }

@@ -3,6 +3,9 @@ import { useJobs } from "./hooks/useJobs";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { KanbanBoard } from "./components/KanbanBoard";
 import { MobileQueue } from "./components/MobileQueue";
+import { MobileApplications } from "./components/MobileApplications";
+import { MobileExcluded } from "./components/MobileExcluded";
+import { MobileNavigation } from "./components/MobileNavigation";
 import { ApplicationsTable } from "./components/ApplicationsTable";
 import { ExcludedList } from "./components/ExcludedList";
 import { ActionBar } from "./components/ActionBar";
@@ -34,6 +37,7 @@ function App() {
       <header className="app-header">
         <div>
           <h1>Job Search Agent</h1>
+          <p className="mobile-header-subtitle">Review, tailor, apply — from your phone.</p>
           <nav className="view-tabs">
             {(Object.keys(VIEW_LABELS) as View[]).map((v) => (
               <button
@@ -46,10 +50,10 @@ function App() {
             ))}
           </nav>
         </div>
-        <ActionBar />
+        {!isMobile && <ActionBar />}
       </header>
 
-      {jobs && <FilterBar jobs={jobs} filters={filters} onChange={setFilters} />}
+      {jobs && !isMobile && <FilterBar jobs={jobs} filters={filters} onChange={setFilters} />}
 
       {isLoading && <div className="app-loading">Loading jobs…</div>}
       {error && <div className="app-error">Failed to reach the API: {String(error)}</div>}
@@ -57,18 +61,23 @@ function App() {
       {filteredJobs &&
         view === "board" &&
         (isMobile ? (
-          <MobileQueue jobs={filteredJobs} onOpenJob={setOpenJobId} />
+          <MobileQueue
+            jobs={filteredJobs}
+            onOpenJob={setOpenJobId}
+            filters={filters}
+            onFiltersChange={setFilters}
+          />
         ) : (
           <KanbanBoard jobs={filteredJobs} onOpenJob={setOpenJobId} />
         ))}
-      {filteredJobs && view === "applications" && (
-        <ApplicationsTable jobs={filteredJobs} onOpenJob={setOpenJobId} />
-      )}
-      {filteredJobs && view === "excluded" && <ExcludedList jobs={filteredJobs} onOpenJob={setOpenJobId} />}
+      {filteredJobs && view === "applications" && (isMobile ? <MobileApplications jobs={filteredJobs} onOpenJob={setOpenJobId} /> : <ApplicationsTable jobs={filteredJobs} onOpenJob={setOpenJobId} />)}
+      {filteredJobs && view === "excluded" && (isMobile ? <MobileExcluded jobs={filteredJobs} onOpenJob={setOpenJobId} /> : <ExcludedList jobs={filteredJobs} onOpenJob={setOpenJobId} />)}
 
       {openJobId !== null && (
         <JobDetailModal jobId={openJobId} onClose={() => setOpenJobId(null)} />
       )}
+
+      {isMobile && <MobileNavigation view={view} onChange={setView} />}
     </div>
   );
 }

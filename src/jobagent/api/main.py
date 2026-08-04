@@ -280,8 +280,24 @@ def application_chat(job_id: int, body: ChatRequest):
         (out_dir / "cover_letter.md").write_text(new_text)
         build_cover_letter_pdf(new_text, out_dir / "cover_letter.pdf")
 
+    def apply_tailored_resume(summary: str, highlights: list[str]) -> bool:
+        """Persist structured AI edits and only then replace the downloadable resume files."""
+        if not summary or not 4 <= len(highlights) <= 6:
+            return False
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        notes = "## Tailored Professional Summary\n\n" + summary.strip() + "\n\n## Tailored Bullet Points\n\n"
+        notes += "\n".join(f"- {highlight.strip()}" for highlight in highlights)
+        (out_dir / "resume_tailoring.md").write_text(notes + "\n")
+        build_tailored_resume(summary, highlights, out_dir / "tailored_resume.docx", job_title=job["title"])
+        build_tailored_resume_pdf(summary, highlights, out_dir / "tailored_resume.pdf", job_title=job["title"])
+        return True
+
     reply, updated = run_application_chat(
-        system_prompt, [m.model_dump() for m in body.messages], apply_cover_letter
+        system_prompt,
+        [m.model_dump() for m in body.messages],
+        apply_cover_letter,
+        apply_tailored_resume,
     )
     return ChatResponse(reply=reply, materials_updated=updated)
 

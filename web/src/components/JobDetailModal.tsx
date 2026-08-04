@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useJob, useGenerateDraft, useGenerateGaps } from "../hooks/useJobs";
+import { useExcludeJob, useGenerateDraft, useGenerateGaps, useJob, useUpdateStatus } from "../hooks/useJobs";
 import { coverLetterPdfUrl, resumeDocxUrl, resumePdfUrl } from "../api/client";
 import { ApplicationChat } from "./ApplicationChat";
 
@@ -23,6 +23,8 @@ export function JobDetailModal({ jobId, onClose }: Props) {
   const { data: job, isLoading } = useJob(jobId);
   const generateDraft = useGenerateDraft();
   const generateGaps = useGenerateGaps();
+  const updateStatus = useUpdateStatus();
+  const excludeJob = useExcludeJob();
 
   if (isLoading || !job) {
     return (
@@ -40,6 +42,19 @@ export function JobDetailModal({ jobId, onClose }: Props) {
   };
 
   const isGenerating = generateDraft.isPending || generateGaps.isPending;
+  const applicationAction = job.status === "applied" ? "Move to interview" : "Mark applied";
+
+  const markApplicationProgress = () => {
+    updateStatus.mutate({ id: job.id, status: job.status === "applied" ? "interviewing" : "applied" });
+  };
+
+  const exclude = () => {
+    const reason = window.prompt("Why exclude this job?", "Not a fit");
+    if (reason?.trim()) {
+      excludeJob.mutate({ id: job.id, reason: reason.trim() });
+      onClose();
+    }
+  };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -119,6 +134,17 @@ export function JobDetailModal({ jobId, onClose }: Props) {
             </button>
           )}
         </div>
+        <footer className="modal-action-footer">
+          <a href={job.url} target="_blank" rel="noreferrer" className="modal-open-posting">
+            Open job site ↗
+          </a>
+          {job.status !== "interviewing" && job.status !== "rejected" && job.status !== "offer" && (
+            <button className="modal-mark-applied" onClick={markApplicationProgress} disabled={updateStatus.isPending}>
+              {updateStatus.isPending ? "Saving…" : applicationAction}
+            </button>
+          )}
+          <button className="modal-not-fit" onClick={exclude} disabled={excludeJob.isPending}>Not a fit</button>
+        </footer>
       </div>
     </div>
   );

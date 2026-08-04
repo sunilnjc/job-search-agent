@@ -23,13 +23,21 @@ export function FilterBar({ jobs, filters, onChange }: Props) {
 
   const toggleRole = (role: RoleCategory) => {
     const next = new Set(filters.roles);
-    next.has(role) ? next.delete(role) : next.add(role);
+    if (next.has(role)) {
+      next.delete(role);
+    } else {
+      next.add(role);
+    }
     onChange({ ...filters, roles: next });
   };
 
   const toggleRegion = (region: string) => {
     const next = new Set(filters.regions);
-    next.has(region) ? next.delete(region) : next.add(region);
+    if (next.has(region)) {
+      next.delete(region);
+    } else {
+      next.add(region);
+    }
     onChange({ ...filters, regions: next });
   };
 
