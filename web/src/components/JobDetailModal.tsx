@@ -13,6 +13,13 @@ const TAB_LABELS: Record<Tab, string> = {
   chat: "Ask AI",
 };
 
+// Same-origin downloads honour this attribute, which is the reliable way to get a
+// company-specific filename on iOS — Safari otherwise names the file after the URL path.
+function docName(company: string, kind: string, extension: string): string {
+  const safe = company.replace(/[/\\:*?"<>|]/g, "-").trim();
+  return `Sunilkumar Kalabandi - ${safe} - ${kind}.${extension}`;
+}
+
 interface Props {
   jobId: number;
   onClose: () => void;
@@ -108,17 +115,17 @@ export function JobDetailModal({ jobId, onClose }: Props) {
             </div>
           )}
           {tab === "resume_tailoring" && content[tab] && job.has_resume_pdf && (
-            <a className="modal-download modal-download-primary" href={resumePdfUrl(job.id)} download>
+            <a className="modal-download modal-download-primary" href={resumePdfUrl(job.id)} download={docName(job.company, "Resume", "pdf")}>
               ⬇ Download resume (.pdf)
             </a>
           )}
           {tab === "resume_tailoring" && content[tab] && job.has_resume_docx && (
-            <a className="modal-download" href={resumeDocxUrl(job.id)} download>
+            <a className="modal-download" href={resumeDocxUrl(job.id)} download={docName(job.company, "Resume", "docx")}>
               ⬇ Download resume (.docx)
             </a>
           )}
           {tab === "cover_letter" && content[tab] && job.has_cover_letter_pdf && (
-            <a className="modal-download modal-download-primary" href={coverLetterPdfUrl(job.id)} download>
+            <a className="modal-download modal-download-primary" href={coverLetterPdfUrl(job.id)} download={docName(job.company, "Cover Letter", "pdf")}>
               ⬇ Download cover letter (.pdf)
             </a>
           )}

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -82,6 +85,30 @@ def _row_to_job(row) -> JobOut:
         eligibility=row["eligibility"] if "eligibility" in row.keys() and row["eligibility"] else "unknown",
         excluded_reason=row["excluded_reason"] if "excluded_reason" in row.keys() else None,
     )
+
+
+def _download_headers(filename: str) -> dict[str, str]:
+    """Content-Disposition that mobile browsers actually honour.
+
+    Starlette's FileResponse(filename=...) emits only the RFC 5987 `filename*=utf-8''`
+    form. iOS Safari ignores that and names the file after the last URL path segment
+    instead, so `/api/jobs/1/resume-pdf` downloads as "resume.pdf". Sending a plain
+    ASCII `filename=` alongside the UTF-8 one fixes it while keeping accents intact on
+    browsers that do support the extended form.
+    """
+    ascii_name = (
+        unicodedata.normalize("NFKD", filename).encode("ascii", "ignore").decode("ascii")
+    )
+    ascii_name = re.sub(r'[\\"]', "", ascii_name).strip() or "document.pdf"
+    quoted = quote(filename)
+    return {"Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=utf-8\'\'{quoted}'}
+
+
+def _document_filename(job, kind: str, extension: str) -> str:
+    """e.g. 'Sunilkumar Kalabandi - Adyen - Cover Letter.pdf' — the company must be in the
+    name so a phone's Downloads folder stays navigable across many applications."""
+    company = re.sub(r"[/\\:*?\"<>|]", "-", str(job["company"])).strip()
+    return f"Sunilkumar Kalabandi - {company} - {kind}.{extension}"
 
 
 def _read_artifact(job_row, filename: str) -> str | None:
@@ -194,11 +221,11 @@ def download_resume_docx(job_id: int):
         if not path.exists():
             raise HTTPException(404, "No tailored resume generated yet for this job")
 
-        filename = f"Sunilkumar Kalabandi - {job['company']}.docx"
+        filename = _document_filename(job, "Resume", "docx")
         return FileResponse(
             path,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            filename=filename,
+            headers=_download_headers(filename),
         )
 
 
@@ -214,8 +241,8 @@ def download_resume_pdf(job_id: int):
         if not path.exists():
             raise HTTPException(404, "No tailored resume PDF generated yet for this job")
 
-        filename = f"Sunilkumar Kalabandi - {job['company']}.pdf"
-        return FileResponse(path, media_type="application/pdf", filename=filename)
+        filename = _document_filename(job, "Resume", "pdf")
+        return FileResponse(path, media_type="application/pdf", headers=_download_headers(filename))
 
 
 @app.get("/api/jobs/{job_id}/cover-letter-pdf")
@@ -230,8 +257,8 @@ def download_cover_letter_pdf(job_id: int):
         if not path.exists():
             raise HTTPException(404, "No cover letter PDF generated yet for this job")
 
-        filename = f"Sunilkumar Kalabandi - Cover Letter - {job['company']}.pdf"
-        return FileResponse(path, media_type="application/pdf", filename=filename)
+        filename = _document_filename(job, "Cover Letter", "pdf")
+        return FileResponse(path, media_type="application/pdf", headers=_download_headers(filename))
 
 
 @app.post("/api/jobs/{job_id}/gaps")
