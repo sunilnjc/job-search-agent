@@ -27,9 +27,11 @@ HELP_TEXT = (
     "/matches — same as /today\n"
     "/autopilot — prepare strictly eligible Ready applications\n"
     "/status — pipeline counts\n\n"
-    "Use <b>Review packet</b> to open the private phone dashboard, or "
-    "<b>📄 Send documents</b> to get the cover letter and tailored resume right here. "
-    "<b>Mark applied</b> only records an application after you submit it on the company site."
+    "<b>📝 Prepare application</b> writes the cover letter and tailored resume for a role, "
+    "then sends them here; <b>📄 Send documents</b> re-sends them once they exist. "
+    "<b>Review packet</b> opens the private phone dashboard.\n\n"
+    "The bot never submits anything — <b>✓ Mark applied</b> only records an application "
+    "after you have submitted it yourself on the company site."
 )
 
 
@@ -83,10 +85,13 @@ def build_job_card(row: Mapping[str, Any], dashboard_url: str) -> tuple[str, dic
             {"text": "Not a fit", "callback_data": f"exclude:{job_id}"},
         ],
     ]
-    # Only offer documents when they actually exist — a button that always errors is worse
-    # than no button. Matched-but-undrafted jobs have no PDFs yet.
+    # Offer whichever action is actually possible: send the PDFs if they exist, otherwise
+    # offer to write them. Without this second button a promising matched-but-undrafted
+    # role is a dead end in Telegram — you'd have to go to a laptop to draft it.
     if job_document_paths(row):
         rows.append([{"text": "📄 Send documents", "callback_data": f"docs:{job_id}"}])
+    else:
+        rows.append([{"text": "📝 Prepare application", "callback_data": f"draft:{job_id}"}])
     return message, {"inline_keyboard": rows}
 
 
@@ -156,6 +161,36 @@ class TelegramBot:
         for path, label in documents:
             self.send_document(chat_id, path, caption=f"{label} — {_short(job['title'], 80)}")
         return len(documents)
+
+    def prepare_job_documents(self, conn, chat_id: str | int, job: Mapping[str, Any]) -> bool:
+        """Write the cover letter, tailored resume and gap analysis, then send the PDFs.
+
+        Drafting is several LLM calls and takes up to a minute, which blocks this
+        single-user bot's poll loop — acceptable here, and better than the alternative of
+        a promising role being un-actionable until you reach a laptop.
+        """
+        from jobagent.profile.resume_parser import parse_resume
+        from jobagent.service import draft_job
+
+        title = html.escape(_short(job["title"], 100))
+        self.send_text(chat_id, f"📝 Preparing your application for <b>{title}</b>. This takes a minute…")
+        try:
+            draft_job(conn, job, parse_resume(), on_progress=lambda _: None)
+        except Exception:  # noqa: BLE001 - report the failure rather than going silent
+            logger.exception("Telegram-triggered drafting failed for job %s", job["id"])
+            self.send_text(chat_id, f"Could not prepare <b>{title}</b>. Try again from the dashboard.")
+            return False
+
+        sent = self.send_job_documents(chat_id, job)
+        if sent:
+            self.send_text(
+                chat_id,
+                f"✅ <b>{title}</b> is ready — review both documents before you submit. "
+                "Then use <b>✓ Mark applied</b> once you've sent it on the company site.",
+            )
+        else:
+            self.send_text(chat_id, f"Prepared <b>{title}</b>, but no PDFs were produced.")
+        return bool(sent)
 
     def send_matches(self, chat_id: str | int, only_unnotified: bool = False, limit: int = 5) -> int:
         with db.connection() as conn:
@@ -269,6 +304,10 @@ class TelegramBot:
                     callback_id,
                     f"Sent {sent} document(s)." if sent else "No documents drafted for this job yet.",
                 )
+                return
+            if action == "draft":
+                self.answer_callback(callback_id, "Writing your application…")
+                self.prepare_job_documents(conn, chat_id, job)
                 return
             if action == "applied":
                 pipeline.transition(conn, job_id, "applied")
