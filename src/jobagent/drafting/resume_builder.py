@@ -43,8 +43,9 @@ CORE_COMPETENCIES = [
     "cross-border transactions, settlement, idempotency",
     "Technical: Java, Spring Boot, Kafka, Kubernetes/OpenShift, microservices, distributed systems, "
     "REST API design, MongoDB, PostgreSQL, Redis, Python, Node.js",
-    "AI & LLM tooling: LLM API integration (OpenAI, Anthropic, local models via Ollama), embeddings "
-    "& semantic search, prompt pipelines, agent workflows",
+    "AI & LLM engineering: LLM API integration (OpenAI, Anthropic, local models via Ollama), "
+    "function/tool calling, embeddings & semantic ranking, retrieval-grounded generation, prompt "
+    "design and injection hardening, agent workflows, cost-aware local/hosted model routing",
     "Customer-facing: requirements translation, integration architecture, partner onboarding & "
     "enablement, stakeholder communication",
 ]
@@ -122,17 +123,36 @@ EARLIER_EXPERIENCE = [
     "applications, payment processing, and credit card integrations for Synchrony Financial and Fiserv.",
 ]
 
+# Each project is a heading plus its own bullets, so the flagship one reads like a real
+# engagement rather than a single dense paragraph.
 PROJECTS = [
-    "Job Search Agent (2026): Full-stack agent that aggregates postings from public job APIs, ranks fit "
-    "against a parsed resume using local LLM embeddings (Ollama, nomic-embed-text) with an LLM scoring "
-    "pass, and generates tailored application drafts (cover letters + resumes) via OpenAI/Anthropic APIs. "
-    "Python CLI + FastAPI backend over a SQLite pipeline, with a React/TypeScript kanban web UI for "
-    "reviewing matches, triggering fetch/match runs, and tracking applications through each stage. "
-    "github.com/sunilnjc",
-    "BudgetTracker (2026): Personal finance app for budgets, expenses, debts, and recurring payments "
-    "with multi-month spending projections — built to replace subscription budgeting apps with a "
-    "self-hosted, AI-assisted tool. React/TypeScript dashboard over a local API, developed with "
-    "AI-assisted engineering workflows (Claude, OpenAI).",
+    {
+        "name": "AI Job Search Agent (2026)  |  github.com/sunilnjc/job-search-agent",
+        "bullets": [
+            "Designed and shipped an autonomous LLM pipeline that ingests, scores and drafts "
+            "applications for 10,500+ postings from five sources — Adzuna across 11 countries, "
+            "14 Greenhouse/Lever company boards, and remote-job feeds — normalised into SQLite.",
+            "Engineered two-tier inference to keep running cost near zero: local Ollama embeddings "
+            "and deterministic rules screen the entire intake, escalating only shortlisted roles to "
+            "hosted models (GPT-4o/4o-mini) for fit scoring and document generation.",
+            "Built a tool-calling assistant (OpenAI function calling) that writes and edits tailored "
+            "resumes and cover letters as PDF/DOCX, grounded in an approved-facts store so it asks "
+            "rather than fabricates; hardened against prompt injection after a live posting attempted "
+            "to fingerprint AI-written applications.",
+            "Delivered the full stack end to end: FastAPI service, React/TypeScript PWA installable on "
+            "iOS, Telegram bot with inline actions and document delivery, scheduled daily agents, "
+            "WAL-mode SQLite for concurrent access, and 60 unit tests.",
+        ],
+    },
+    {
+        "name": "BudgetTracker (2026)",
+        "bullets": [
+            "Personal finance app for budgets, expenses, debts and recurring payments with multi-month "
+            "spending projections, built to replace subscription budgeting tools with a self-hosted "
+            "alternative. React/TypeScript dashboard over a local API, developed with AI-assisted "
+            "engineering workflows (Claude, OpenAI).",
+        ],
+    },
 ]
 
 EDUCATION = [
@@ -237,8 +257,10 @@ def build_tailored_resume(summary: str, highlights: list[str], output_path: Path
     _para(doc, "", space_after=4)
 
     _heading(doc, "PROJECTS")
-    for line in PROJECTS:
-        _bullet(doc, line)
+    for project in PROJECTS:
+        _para(doc, project["name"], bold=True, size=9.5, space_after=2)
+        for line in project["bullets"]:
+            _bullet(doc, line)
     _para(doc, "", space_after=4)
 
     _heading(doc, "EDUCATION & CERTIFICATIONS")
@@ -306,7 +328,9 @@ def build_tailored_resume_pdf(summary: str, highlights: list[str], output_path: 
     story.append(bullets(EARLIER_EXPERIENCE))
     story.append(Spacer(1, 6))
     story.append(Paragraph("PROJECTS", styles["heading"]))
-    story.append(bullets(PROJECTS))
+    for project in PROJECTS:
+        story.append(Paragraph(project["name"], styles["role"]))
+        story.append(bullets(project["bullets"]))
     story.append(Spacer(1, 6))
     story.append(Paragraph("EDUCATION & CERTIFICATIONS", styles["heading"]))
     story.append(bullets(EDUCATION))
