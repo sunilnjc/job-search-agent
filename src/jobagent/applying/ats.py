@@ -27,7 +27,9 @@ BROWSER_UA = (
 # pages that embed the ATS in an iframe or mount it client-side, where the address bar
 # never shows the ATS domain.
 ATS_SIGNATURES: list[tuple[str, str, Optional[str]]] = [
-    ("greenhouse", r"greenhouse\.io|boards\.greenhouse", r"greenhouse\.io|grnhse"),
+    # gh_jid / gh_src are Greenhouse's own query params, carried even when a company
+    # serves the board from its own domain (e.g. stripe.com/jobs/search?gh_jid=...).
+    ("greenhouse", r"greenhouse\.io|boards\.greenhouse|[?&]gh_jid=|[?&]gh_src=", r"greenhouse\.io|grnhse"),
     ("lever", r"jobs\.lever\.co|//lever\.co", r"lever\.co/|leverapp"),
     ("workday", r"myworkdayjobs\.com|\.workday\.com", r"myworkdayjobs|workdayjobs"),
     ("ashby", r"jobs\.ashbyhq\.com|ashbyhq\.com", r"ashbyhq"),
