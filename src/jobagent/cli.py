@@ -147,5 +147,18 @@ def telegram_notify(limit: int = typer.Option(5, "--limit", help="Maximum new ma
     typer.echo(f"Sent {sent} Telegram job notification(s).")
 
 
+@app.command("autopilot")
+def autopilot(limit: int = typer.Option(settings.autopilot_batch_size, "--limit", help="Maximum Ready applications to prepare")):
+    """Prepare strict, eligible Ready applications and record their safe stopping point."""
+    from jobagent.applying.autopilot import process_ready_queue
+
+    results = process_ready_queue(limit=limit)
+    if not results:
+        typer.echo("No drafted roles meet the score-9+/worldwide-or-sponsors autopilot rule.")
+        return
+    for result in results:
+        typer.echo(f"[{result.job_id}] {result.state}: {result.title} @ {result.company} ({result.reason or result.final_url or ''})")
+
+
 if __name__ == "__main__":
     app()

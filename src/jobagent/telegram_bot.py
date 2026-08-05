@@ -25,6 +25,7 @@ HELP_TEXT = (
     "<b>Job Search Agent</b>\n\n"
     "/today — eligible high-match roles ready to review\n"
     "/matches — same as /today\n"
+    "/autopilot — prepare strictly eligible Ready applications\n"
     "/status — pipeline counts\n\n"
     "Use <b>Review packet</b> to open the private phone dashboard, or "
     "<b>📄 Send documents</b> to get the cover letter and tailored resume right here. "
@@ -182,6 +183,32 @@ class TelegramBot:
         lines = [f"<b>{html.escape(status.title())}</b>: {count}" for status, count in counts.items() if count]
         self.send_text(chat_id, "<b>Pipeline status</b>\n\n" + "\n".join(lines))
 
+    def run_autopilot(self, chat_id: str | int) -> int:
+        """Prepare the strict Ready queue and describe every safe stopping point."""
+        from jobagent.applying.autopilot import process_ready_queue
+
+        results = process_ready_queue()
+        if not results:
+            eligibility_note = (
+                "including unknown roles outside the US/UK" if settings.autopilot_include_unknown_outside_us_uk
+                else "with explicit worldwide or sponsorship eligibility"
+            )
+            self.send_text(
+                chat_id,
+                f"No drafted roles currently meet the autopilot rule: score 9+ and {eligibility_note}.",
+            )
+            return 0
+        lines = ["<b>Application preparation</b>"]
+        for result in results:
+            role = html.escape(_short(f"{result.title} — {result.company}", 120))
+            if result.state == "ready_for_submission":
+                lines.append(f"• {role}: packet ready; final submission still needs confirmation.")
+            else:
+                reason = html.escape((result.reason or "needs review").replace("_", " "))
+                lines.append(f"• {role}: <b>action required</b> ({reason}).")
+        self.send_text(chat_id, "\n".join(lines))
+        return len(results)
+
     def handle_message(self, message: Mapping[str, Any]) -> None:
         chat_id = message.get("chat", {}).get("id")
         text = str(message.get("text") or "").strip()
@@ -210,8 +237,10 @@ class TelegramBot:
             self.send_matches(chat_id)
         elif command == "/status":
             self.send_status(chat_id)
+        elif command == "/autopilot":
+            self.run_autopilot(chat_id)
         else:
-            self.send_text(chat_id, "Use /today, /matches, /status, or /help.")
+            self.send_text(chat_id, "Use /today, /matches, /autopilot, /status, or /help.")
 
     def handle_callback(self, callback: Mapping[str, Any]) -> None:
         chat_id = callback.get("message", {}).get("chat", {}).get("id")

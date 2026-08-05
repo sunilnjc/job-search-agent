@@ -19,8 +19,10 @@ tailored application materials, and track application status.
 5. **Status** — tracks each job through new -> matched -> drafted -> applied ->
    interviewing -> rejected/offer.
 
-This tool never auto-submits applications anywhere — drafts are for you to review and
-submit yourself.
+The application worker can prepare a strictly eligible Ready queue, but it never submits
+silently. A job is only marked applied after a browser handler observes the employer's
+confirmation page; CAPTCHA, OTP/2FA, unclear work authorization, unfamiliar questions, and
+upload errors stop as an exception for you to handle.
 
 ## Private Telegram companion
 
@@ -60,12 +62,19 @@ demanding an explicit "we sponsor" tag would filter the queue down to almost not
    ```
 
 The bot uses long polling, so it needs no public webhook or additional exposed port. It accepts
-commands and buttons only from `TELEGRAM_ALLOWED_CHAT_ID`. Use `/today`, `/matches`, and `/status`
-from Telegram; the daily notification runs at 07:20 after the existing morning preparation task.
+commands and buttons only from `TELEGRAM_ALLOWED_CHAT_ID`. Use `/today`, `/matches`, `/autopilot`,
+and `/status` from Telegram; the daily notification runs at 07:20 after the existing morning
+preparation task.
 
 Each job card carries **📄 Send documents**, which uploads that role's `cover_letter.pdf` and
 `tailored_resume.pdf` into the chat — useful when you want to read them on the phone without the
 dashboard. The button only appears once those files have actually been drafted.
+
+`/autopilot` processes drafted roles with a score of at least 9 and explicit `worldwide` or
+`sponsors` eligibility. Set `AUTOPILOT_INCLUDE_UNKNOWN_OUTSIDE_US_UK=true` in local `.env` to
+also prepare unknown-eligibility roles outside the US/UK. Those roles still stop before
+submission if sponsorship or work authorization is unclear. The worker generates missing PDFs,
+detects the employer ATS, and stores an auditable attempt record.
 
 After changing bot code, restart the running agent so it picks the change up:
 
@@ -115,6 +124,7 @@ jobagent gaps <job_id>              # missing requirements/keywords vs a posting
 jobagent draft <job_id>             # generate cover letter + tailored resume bullets
 jobagent status                     # list jobs by pipeline stage
 jobagent status <job_id> <stage>    # update a job's pipeline stage
+jobagent autopilot [--limit N]      # prepare strict Ready applications and log safe stop points
 ```
 
 ## Daily automation (macOS)

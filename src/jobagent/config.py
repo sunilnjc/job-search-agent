@@ -37,6 +37,14 @@ class Settings:
         self.telegram_allowed_chat_id = os.getenv("TELEGRAM_ALLOWED_CHAT_ID", "")
         self.telegram_dashboard_url = os.getenv("TELEGRAM_DASHBOARD_URL", "").rstrip("/")
         self.telegram_min_score = int(os.getenv("TELEGRAM_MIN_SCORE", "8"))
+        # Autopilot is deliberately narrower than the review feed.  An unknown eligibility
+        # classification is useful for a human to review, but never enough to start an
+        # application on its own.
+        self.autopilot_min_score = int(os.getenv("AUTOPILOT_MIN_SCORE", "9"))
+        self.autopilot_batch_size = int(os.getenv("AUTOPILOT_BATCH_SIZE", "5"))
+        self.autopilot_include_unknown_outside_us_uk = (
+            os.getenv("AUTOPILOT_INCLUDE_UNKNOWN_OUTSIDE_US_UK", "false").lower() == "true"
+        )
 
     def load_preferences(self) -> dict:
         if not self.preferences_path.exists():

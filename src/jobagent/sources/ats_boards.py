@@ -10,6 +10,29 @@ from jobagent.sources.text_clean import clean_html
 GREENHOUSE_URL = "https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
 LEVER_URL = "https://api.lever.co/v0/postings/{board}"
 
+# Board tokens are URL slugs, not names. Without this the company reads as "n26" or
+# "remotecom" everywhere — including in generated cover letters.
+BOARD_DISPLAY_NAMES = {
+    "n26": "N26",
+    "gitlab": "GitLab",
+    "sumup": "SumUp",
+    "remotecom": "Remote.com",
+    "adyen": "Adyen",
+    "stripe": "Stripe",
+    "anthropic": "Anthropic",
+    "datadog": "Datadog",
+    "elastic": "Elastic",
+    "canonical": "Canonical",
+    "celonis": "Celonis",
+    "ripple": "Ripple",
+    "monzo": "Monzo",
+    "speechify": "Speechify",
+}
+
+
+def display_name(board: str) -> str:
+    return BOARD_DISPLAY_NAMES.get(board.lower(), board.replace("-", " ").title())
+
 
 class ATSBoardsSource(JobSource):
     name = "ats_boards"
@@ -40,7 +63,7 @@ class ATSBoardsSource(JobSource):
                     source=f"greenhouse:{board}",
                     external_id=str(job.get("id")),
                     title=job.get("title", ""),
-                    company=board,
+                    company=display_name(board),
                     location=(job.get("location") or {}).get("name", ""),
                     remote="remote" in (job.get("location") or {}).get("name", "").lower(),
                     url=job.get("absolute_url", ""),
@@ -64,7 +87,7 @@ class ATSBoardsSource(JobSource):
                     source=f"lever:{board}",
                     external_id=str(job.get("id")),
                     title=job.get("text", ""),
-                    company=board,
+                    company=display_name(board),
                     location=location,
                     remote="remote" in location.lower(),
                     url=job.get("hostedUrl", ""),

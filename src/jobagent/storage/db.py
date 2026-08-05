@@ -40,6 +40,22 @@ CREATE TABLE IF NOT EXISTS telegram_notifications (
     job_id INTEGER PRIMARY KEY REFERENCES jobs(id),
     notified_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS application_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL REFERENCES jobs(id),
+    state TEXT NOT NULL,
+    ats TEXT,
+    final_url TEXT,
+    reason TEXT,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    submitted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_attempts_job_created
+ON application_attempts (job_id, created_at DESC);
 """
 
 
@@ -239,3 +255,95 @@ def mark_telegram_notified(conn: sqlite3.Connection, job_id: int) -> None:
         """,
         (job_id, now_iso()),
     )
+
+
+def autopilot_candidates(
+    conn: sqlite3.Connection,
+    min_score: int,
+    limit: int,
+    include_unknown_outside_us_uk: bool = False,
+) -> list[sqlite3.Row]:
+    """Return drafts that are safe enough to enter the application worker.
+
+    Confirmed worldwide/sponsoring roles always qualify. Unknown roles are included only
+    when the owner explicitly opts in and the recorded country/location is not US/UK.
+    A prior live attempt is not repeated.
+    """
+    return conn.execute(
+        """
+        SELECT jobs.*, match_scores.llm_score, match_scores.llm_reasoning,
+               match_scores.embedding_similarity, match_scores.eligibility
+        FROM jobs
+        JOIN match_scores ON jobs.id = match_scores.job_id
+        WHERE jobs.status = 'drafted'
+          AND jobs.excluded_reason IS NULL
+          AND match_scores.llm_score >= ?
+          AND (
+              match_scores.eligibility IN ('worldwide', 'sponsors')
+              OR (
+                  ? = 1
+                  AND match_scores.eligibility = 'unknown'
+                  AND lower(COALESCE(jobs.country, '')) NOT IN
+                      ('us', 'usa', 'united states', 'united states of america', 'uk', 'gb', 'gbr', 'united kingdom')
+                  AND lower(jobs.location) NOT LIKE '%united states%'
+                  AND lower(jobs.location) NOT LIKE '%u.s.%'
+                  AND lower(jobs.location) NOT LIKE '%united kingdom%'
+                  AND lower(jobs.location) NOT LIKE '%uk%'
+              )
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM application_attempts attempts
+              WHERE attempts.job_id = jobs.id
+                AND attempts.state IN ('queued', 'preparing', 'ready_for_submission', 'submitted')
+          )
+        ORDER BY match_scores.llm_score DESC, match_scores.embedding_similarity DESC
+        LIMIT ?
+        """,
+        (min_score, int(include_unknown_outside_us_uk), limit),
+    ).fetchall()
+
+
+def create_application_attempt(conn: sqlite3.Connection, job_id: int, state: str = "queued") -> int:
+    now = now_iso()
+    cursor = conn.execute(
+        """
+        INSERT INTO application_attempts (job_id, state, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (job_id, state, now, now),
+    )
+    return int(cursor.lastrowid)
+
+
+def update_application_attempt(
+    conn: sqlite3.Connection,
+    attempt_id: int,
+    *,
+    state: str,
+    ats: Optional[str] = None,
+    final_url: Optional[str] = None,
+    reason: Optional[str] = None,
+    details_json: Optional[str] = None,
+    submitted: bool = False,
+) -> None:
+    """Update one auditable application attempt without ever changing the job status."""
+    fields = ["state = ?", "updated_at = ?"]
+    values: list[object] = [state, now_iso()]
+    for column, value in (
+        ("ats", ats),
+        ("final_url", final_url),
+        ("reason", reason),
+        ("details_json", details_json),
+    ):
+        if value is not None:
+            fields.append(f"{column} = ?")
+            values.append(value)
+    if submitted:
+        fields.append("submitted_at = ?")
+        values.append(now_iso())
+    values.append(attempt_id)
+    conn.execute(f"UPDATE application_attempts SET {', '.join(fields)} WHERE id = ?", values)
+
+
+def get_application_attempt(conn: sqlite3.Connection, attempt_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM application_attempts WHERE id = ?", (attempt_id,)).fetchone()
