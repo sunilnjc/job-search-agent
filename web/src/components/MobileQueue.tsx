@@ -51,7 +51,7 @@ export function MobileQueue({ jobs, onOpenJob, filters, onFiltersChange }: Props
   );
 
   const readyCount = counts.drafted ?? 0;
-  const hasFilters = filters.roles.size > 0 || filters.regions.size > 0;
+  const hasFilters = filters.roles.size > 0 || filters.regions.size > 0 || Boolean(filters.query);
   const regions = useMemo(() => {
     const countsByRegion = new Map<string, number>();
     for (const job of jobs) {
@@ -93,6 +93,16 @@ export function MobileQueue({ jobs, onOpenJob, filters, onFiltersChange }: Props
           Filter{hasFilters ? " · On" : ""}
         </button>
       </section>
+
+      <label className="mq-search">
+        <span className="sr-only">Search jobs</span>
+        <input
+          type="search"
+          value={filters.query}
+          onChange={(event) => onFiltersChange({ ...filters, query: event.target.value })}
+          placeholder="Search jobs, companies, locations"
+        />
+      </label>
 
       <div className="mq-stages">
         {STAGES.map((s) => (
@@ -176,7 +186,7 @@ export function MobileQueue({ jobs, onOpenJob, filters, onFiltersChange }: Props
               </div>
             </div>
             <div className="mobile-filter-actions">
-              <button onClick={() => onFiltersChange({ roles: new Set(), regions: new Set() })}>Clear all</button>
+              <button onClick={() => onFiltersChange({ roles: new Set(), regions: new Set(), query: "" })}>Clear all</button>
               <button className="mobile-filter-done" onClick={() => setFiltersOpen(false)}>Show jobs</button>
             </div>
           </div>

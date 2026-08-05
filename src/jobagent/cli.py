@@ -30,9 +30,12 @@ def fetch(url: Optional[str] = typer.Option(None, "--url", help="Fetch a single 
 
 
 @app.command()
-def match(limit: Optional[int] = typer.Option(None, "--limit", help="Only score this many unscored jobs")):
+def match(
+    limit: Optional[int] = typer.Option(None, "--limit", help="Only score this many unscored jobs"),
+    direct_only: bool = typer.Option(False, "--direct-only", help="Score only direct Greenhouse/Lever board jobs"),
+):
     """Score fetched jobs against your resume: embedding prefilter + Ollama fit rating."""
-    run_match(limit, on_progress=typer.echo)
+    run_match(limit, on_progress=typer.echo, direct_only=direct_only)
 
 
 @app.command()

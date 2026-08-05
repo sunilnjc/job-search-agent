@@ -27,7 +27,7 @@ function App() {
   const { data: jobs, isLoading, error } = useJobs();
   const [openJobId, setOpenJobId] = useState<number | null>(null);
   const [view, setView] = useState<View>("board");
-  const [filters, setFilters] = useState<JobFilters>({ roles: new Set(), regions: new Set() });
+  const [filters, setFilters] = useState<JobFilters>({ roles: new Set(), regions: new Set(), query: "" });
   const isMobile = useIsMobile();
 
   const filteredJobs = useMemo(() => (jobs ? applyFilters(jobs, filters) : undefined), [jobs, filters]);

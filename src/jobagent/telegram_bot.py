@@ -234,14 +234,16 @@ class TelegramBot:
             )
             return 0
         lines = ["<b>Application preparation</b>"]
+        buttons: list[list[dict[str, str]]] = []
         for result in results:
             role = html.escape(_short(f"{result.title} — {result.company}", 120))
             if result.state == "ready_for_submission":
-                lines.append(f"• {role}: packet ready; final submission still needs confirmation.")
+                lines.append(f"• {role}: packet ready; choose Confirm submit to send it.")
+                buttons.append([{"text": f"Confirm submit: {_short(result.company, 28)}", "callback_data": f"submit:{result.attempt_id}"}])
             else:
                 reason = html.escape((result.reason or "needs review").replace("_", " "))
                 lines.append(f"• {role}: <b>action required</b> ({reason}).")
-        self.send_text(chat_id, "\n".join(lines))
+        self.send_text(chat_id, "\n".join(lines), {"inline_keyboard": buttons} if buttons else None)
         return len(results)
 
     def handle_message(self, message: Mapping[str, Any]) -> None:
@@ -290,6 +292,23 @@ class TelegramBot:
             job_id = int(raw_job_id)
         except (ValueError, TypeError):
             self.answer_callback(callback_id, "Invalid action.")
+            return
+
+        if action == "submit":
+            from jobagent.applying.autopilot import submit_attempt
+
+            self.answer_callback(callback_id, "Submitting the prepared application…")
+            try:
+                result = submit_attempt(job_id)
+            except ValueError:
+                self.send_text(chat_id, "That application attempt no longer exists.")
+                return
+            role = html.escape(_short(f"{result.title} — {result.company}", 120))
+            if result.state == "submitted":
+                self.send_text(chat_id, f"✅ Submitted <b>{role}</b> and marked it Applied.")
+            else:
+                reason = html.escape((result.reason or "needs review").replace("_", " "))
+                self.send_text(chat_id, f"⚠️ <b>{role}</b> was not submitted: {reason}.")
             return
 
         with db.connection() as conn:

@@ -89,11 +89,14 @@ def run_fetch(url: Optional[str] = None, on_progress: ProgressFn = print) -> int
             on_progress(f"[{source.name}] fetched {len(postings)} postings")
             total += len(postings)
         apply_sponsorship_exclusions(conn, on_progress)
+        duplicates = db.exclude_duplicate_aggregator_listings(conn)
+        if duplicates:
+            on_progress(f"Excluded {duplicates} duplicate discovery-feed listings.")
     on_progress(f"Done. {total} postings processed.")
     return total
 
 
-def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print) -> None:
+def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print, direct_only: bool = False) -> None:
     """Score fetched jobs against the resume: title filter + eligibility + embedding + LLM rating."""
     db.init_db()
     profile = parse_resume()
@@ -103,7 +106,7 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print) -> N
     blocked_countries = prefs.get("sponsorship_required_countries", [])
 
     with db.connection() as conn:
-        jobs = db.list_jobs_without_score(conn)
+        jobs = db.list_unscored_direct_ats_jobs(conn) if direct_only else db.list_jobs_without_score(conn)
         if limit:
             jobs = jobs[:limit]
         on_progress(f"Scoring {len(jobs)} unscored jobs...")
@@ -114,6 +117,7 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print) -> N
                     conn,
                     MatchScore(job_id=job["id"], embedding_similarity=0.0, eligibility="title-filtered"),
                 )
+                conn.commit()
                 on_progress(f"  [{job['id']}] {job['title']} @ {job['company']} — skipped (title filter)")
                 continue
 
@@ -126,6 +130,7 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print) -> N
                     conn,
                     MatchScore(job_id=job["id"], embedding_similarity=0.0, eligibility=eligibility),
                 )
+                conn.commit()
                 on_progress(f"  [{job['id']}] {job['title']} @ {job['company']} — skipped (restricted)")
                 continue
 
@@ -140,6 +145,7 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print) -> N
                     MatchScore(job_id=job["id"], embedding_similarity=0.0, eligibility="no-sponsorship"),
                 )
                 db.set_excluded(conn, job["id"], SPONSORSHIP_EXCLUSION_REASON)
+                conn.commit()
                 on_progress(
                     f"  [{job['id']}] {job['title']} @ {job['company']} — auto-excluded (on-site, no sponsorship)"
                 )
@@ -150,9 +156,12 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print) -> N
 
             llm_score, llm_reasoning = None, None
             if similarity >= EMBEDDING_SIMILARITY_FLOOR:
-                llm_score, llm_reasoning = rank_job(
-                    profile, job["title"], job["company"], job["location"], job["description"]
-                )
+                try:
+                    llm_score, llm_reasoning = rank_job(
+                        profile, job["title"], job["company"], job["location"], job["description"]
+                    )
+                except Exception as exc:  # preserve prior work; this job can be re-scored later
+                    llm_reasoning = f"Ranking deferred: {type(exc).__name__}"
 
             db.save_match_score(
                 conn,
@@ -167,6 +176,10 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print) -> N
 
             if llm_score is not None and llm_score >= LLM_SCORE_THRESHOLD:
                 pipeline.transition(conn, job["id"], "matched")
+
+            # Matching can involve hundreds of API/model calls. Commit each completed row so
+            # an intermittent provider failure never rolls back the entire direct-source batch.
+            conn.commit()
 
             on_progress(
                 f"  [{job['id']}] {job['title']} @ {job['company']} — "

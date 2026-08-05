@@ -26,6 +26,9 @@ class AutopilotTests(unittest.TestCase):
         )
         self.unknown_eligibility_patch.start()
         self.addCleanup(self.unknown_eligibility_patch.stop)
+        self.direct_ats_patch = mock.patch.object(settings, "autopilot_require_direct_ats", False)
+        self.direct_ats_patch.start()
+        self.addCleanup(self.direct_ats_patch.stop)
         db.init_db(self.db_path)
 
     def _seed(self, *, eligibility="sponsors", score=9, url="https://boards.greenhouse.io/acme/jobs/1"):
@@ -99,6 +102,27 @@ class AutopilotTests(unittest.TestCase):
         resolver = lambda url: ATSDetection("greenhouse", url, False, False)
         self.assertEqual(len(process_ready_queue(db_path=self.db_path, resolver=resolver)), 1)
         self.assertEqual(process_ready_queue(db_path=self.db_path, resolver=resolver), [])
+
+    def test_exception_attempt_is_not_repeated_automatically(self):
+        self._seed()
+        resolver = lambda url: ATSDetection(None, url, True, True)
+        first = process_ready_queue(db_path=self.db_path, resolver=resolver)
+        self.assertEqual(first[0].state, "exception")
+        self.assertEqual(process_ready_queue(db_path=self.db_path, resolver=resolver), [])
+
+    def test_direct_ats_mode_skips_aggregator_sources(self):
+        direct = self._seed(eligibility="sponsors")
+        with db.connection(self.db_path) as conn:
+            conn.execute("UPDATE jobs SET source = 'greenhouse:acme' WHERE id = ?", (direct,))
+        aggregator = self._seed(eligibility="sponsors", url="https://example.com/2")
+        settings.autopilot_require_direct_ats = True
+
+        results = process_ready_queue(
+            db_path=self.db_path,
+            resolver=lambda url: ATSDetection("greenhouse", url, False, False),
+        )
+        self.assertEqual([result.job_id for result in results], [direct])
+        self.assertNotEqual(direct, aggregator)
 
 
 if __name__ == "__main__":

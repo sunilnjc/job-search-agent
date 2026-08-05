@@ -45,12 +45,18 @@ export function regionOf(job: Job): string {
 export interface JobFilters {
   roles: Set<RoleCategory>;
   regions: Set<string>;
+  query: string;
 }
 
 export function applyFilters(jobs: Job[], filters: JobFilters): Job[] {
+  const query = filters.query.trim().toLowerCase();
   return jobs.filter((job) => {
     if (filters.roles.size > 0 && !filters.roles.has(categorizeRole(job.title))) return false;
     if (filters.regions.size > 0 && !filters.regions.has(regionOf(job))) return false;
+    if (query) {
+      const searchable = [job.title, job.company, job.location, job.country ?? ""].join(" ").toLowerCase();
+      if (!searchable.includes(query)) return false;
+    }
     return true;
   });
 }

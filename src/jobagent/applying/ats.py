@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -120,3 +121,72 @@ def resolve(url: str, timeout: float = 8.0, fetch_html: bool = True) -> ATSDetec
         is_aggregator=is_aggregator(final_url),
         error=None if response.status_code < 400 else f"HTTP {response.status_code}",
     )
+
+
+def choose_apply_link(page_url: str, links: list[tuple[str, str]]) -> Optional[str]:
+    """Choose the likely employer Apply URL from links collected on an aggregator page.
+
+    Prefer a recognised ATS.  Links that stay on the listing aggregator are never an
+    application destination, even if their button happens to say Apply.
+    """
+    source_host = urlparse(page_url).netloc.lower()
+    choices: list[tuple[int, str]] = []
+    for href, label in links:
+        if not href or href.startswith(("#", "mailto:", "javascript:")):
+            continue
+        candidate = urljoin(page_url, href)
+        host = urlparse(candidate).netloc.lower()
+        if not host or host == source_host or is_aggregator(candidate):
+            continue
+        score = 0
+        if detect_from_url(candidate):
+            score += 100
+        if re.search(r"apply|application|bewerben|solliciteren|postuler", label, re.I):
+            score += 30
+        if score:
+            choices.append((score, candidate))
+    return max(choices, default=(0, None), key=lambda item: item[0])[1]
+
+
+def resolve_with_browser(url: str, timeout_ms: int = 30_000) -> ATSDetection:
+    """Resolve a JavaScript-rendered listing into the employer's actual application URL.
+
+    Aggregators commonly return HTTP 403 to a simple client while their browser page carries
+    an outbound Apply button. This reads that button only; it never fills or submits a form.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return ATSDetection(None, url, False, is_aggregator(url), "playwright_not_installed")
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(user_agent=BROWSER_UA)
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                page.wait_for_timeout(750)
+                final_url = page.url
+                direct = detect_from_url(final_url)
+                if direct:
+                    return ATSDetection(direct, final_url, True, False)
+                links = page.locator("a[href]").evaluate_all(
+                    "els => els.map(a => [a.href, (a.innerText || a.getAttribute('aria-label') || '').trim()])"
+                )
+                apply_url = choose_apply_link(final_url, [(str(href), str(label)) for href, label in links])
+                if not apply_url:
+                    return ATSDetection(None, final_url, True, is_aggregator(final_url), "employer_apply_link_not_found")
+            finally:
+                browser.close()
+    except Exception as exc:  # browser/network failure is a reportable exception, not a crash
+        return ATSDetection(None, url, False, is_aggregator(url), f"browser_resolution_error:{type(exc).__name__}")
+    return resolve(apply_url, fetch_html=True)
+
+
+def resolve_for_application(url: str) -> ATSDetection:
+    """Use fast HTTP resolution first, then a browser only for blocked/aggregator pages."""
+    detected = resolve(url)
+    if detected.is_aggregator or detected.error:
+        browser_detected = resolve_with_browser(url)
+        if browser_detected.ats or not browser_detected.is_aggregator:
+            return browser_detected
+    return detected

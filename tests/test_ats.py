@@ -4,6 +4,7 @@ import unittest
 
 from jobagent.applying.ats import (
     ATSDetection,
+    choose_apply_link,
     detect_from_html,
     detect_from_url,
     is_aggregator,
@@ -75,6 +76,27 @@ class ATSDetectionTests(unittest.TestCase):
         )
         self.assertFalse(
             ATSDetection(ats=None, final_url="u", resolved=True, is_aggregator=True).supported
+        )
+
+
+class ApplyLinkSelectionTests(unittest.TestCase):
+    def test_prefers_external_recognised_ats_apply_link(self):
+        selected = choose_apply_link(
+            "https://www.adzuna.de/details/42",
+            [
+                ("/details/42", "Apply now"),
+                ("https://jobs.lever.co/acme/123", "Apply for this job"),
+                ("https://acme.example/careers", "Company careers"),
+            ],
+        )
+        self.assertEqual(selected, "https://jobs.lever.co/acme/123")
+
+    def test_never_returns_another_aggregator_link(self):
+        self.assertIsNone(
+            choose_apply_link(
+                "https://remoteok.com/remote-jobs/42",
+                [("https://www.adzuna.com/details/99", "Apply")],
+            )
         )
 
 

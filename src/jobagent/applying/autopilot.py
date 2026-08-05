@@ -43,7 +43,7 @@ def process_job(
     conn,
     job: Mapping[str, Any],
     *,
-    resolver: Callable[[str], ats.ATSDetection] = ats.resolve,
+    resolver: Callable[[str], ats.ATSDetection] = ats.resolve_for_application,
     profile: Any = None,
 ) -> AutopilotResult:
     """Prepare a single strict-eligibility job, preserving every outcome in SQLite."""
@@ -64,11 +64,16 @@ def process_job(
             {"resolved": detected.resolved, "is_aggregator": detected.is_aggregator}, sort_keys=True
         )
         if detected.error:
+            reason = (
+                "employer_apply_link_not_found"
+                if detected.error == "employer_apply_link_not_found"
+                else "application_page_unavailable"
+            )
             db.update_application_attempt(
                 conn, attempt_id, state="exception", ats=detected.ats,
-                final_url=detected.final_url, reason="application_page_unavailable", details_json=metadata,
+                final_url=detected.final_url, reason=reason, details_json=metadata,
             )
-            return _result(job, "exception", reason="application_page_unavailable", attempt_id=attempt_id, final_url=detected.final_url)
+            return _result(job, "exception", reason=reason, attempt_id=attempt_id, final_url=detected.final_url)
         if detected.is_aggregator or not detected.supported:
             db.update_application_attempt(
                 conn, attempt_id, state="exception", ats=detected.ats,
@@ -93,7 +98,7 @@ def process_ready_queue(
     *,
     limit: Optional[int] = None,
     db_path: Optional[Path] = None,
-    resolver: Callable[[str], ats.ATSDetection] = ats.resolve,
+    resolver: Callable[[str], ats.ATSDetection] = ats.resolve_for_application,
     profile: Any = None,
 ) -> list[AutopilotResult]:
     """Process a bounded batch of explicitly eligible drafted roles.
@@ -109,5 +114,30 @@ def process_ready_queue(
             settings.autopilot_min_score,
             batch_size,
             include_unknown_outside_us_uk=settings.autopilot_include_unknown_outside_us_uk,
+            require_direct_ats=settings.autopilot_require_direct_ats,
         )
         return [process_job(conn, job, resolver=resolver, profile=profile) for job in jobs]
+
+
+def submit_attempt(attempt_id: int, db_path: Optional[Path] = None) -> AutopilotResult:
+    """Perform the confirmed submission step for a prepared, supported application."""
+    from jobagent.applying.greenhouse import submit as submit_greenhouse
+
+    with db.connection(db_path) as conn:
+        attempt = db.get_application_attempt_job(conn, attempt_id)
+        if not attempt:
+            raise ValueError(f"No application attempt {attempt_id}")
+        if attempt["state"] != "ready_for_submission":
+            return _result(attempt, "exception", reason="attempt_not_ready", attempt_id=attempt_id)
+        if attempt["ats"] != "greenhouse":
+            return _result(attempt, "exception", reason="ats_handler_not_available", attempt_id=attempt_id)
+        cover, resume = document_paths(attempt)
+        outcome = submit_greenhouse(attempt, resume, cover)
+        db.update_application_attempt(
+            conn, attempt_id, state=outcome.state, reason=outcome.reason, submitted=outcome.state == "submitted"
+        )
+        if outcome.state == "submitted":
+            from jobagent.tracking import pipeline
+
+            pipeline.transition(conn, int(attempt["job_id"]), "applied")
+        return _result(attempt, outcome.state, reason=outcome.reason, attempt_id=attempt_id, final_url=attempt["final_url"])

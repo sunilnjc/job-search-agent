@@ -143,6 +143,19 @@ def list_jobs_without_score(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def list_unscored_direct_ats_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Unscored Greenhouse/Lever postings, prioritised for the application pipeline."""
+    return conn.execute(
+        """
+        SELECT jobs.* FROM jobs
+        LEFT JOIN match_scores ON jobs.id = match_scores.job_id
+        WHERE match_scores.job_id IS NULL
+          AND (jobs.source LIKE 'greenhouse:%' OR jobs.source LIKE 'lever:%')
+        ORDER BY jobs.id DESC
+        """
+    ).fetchall()
+
+
 def save_match_score(conn: sqlite3.Connection, score: MatchScore) -> None:
     score.scored_at = score.scored_at or now_iso()
     conn.execute(
@@ -183,6 +196,30 @@ def set_excluded(conn: sqlite3.Connection, job_id: int, reason: Optional[str]) -
     """Set (or clear, with reason=None) a job's excluded_reason. Excluded jobs are hidden
     from the kanban board but remain in the DB, visible in the Excluded tab."""
     conn.execute("UPDATE jobs SET excluded_reason = ? WHERE id = ?", (reason, job_id))
+
+
+def exclude_duplicate_aggregator_listings(conn: sqlite3.Connection) -> int:
+    """Hide duplicate discovery-feed rows without ever touching direct employer postings."""
+    rows = conn.execute(
+        """
+        SELECT id FROM (
+            SELECT id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY lower(company), lower(title), lower(location)
+                       ORDER BY id
+                   ) AS duplicate_rank
+            FROM jobs
+            WHERE source IN ('adzuna', 'remoteok', 'weworkremotely')
+              AND excluded_reason IS NULL
+        ) WHERE duplicate_rank > 1
+        """
+    ).fetchall()
+    if rows:
+        conn.executemany(
+            "UPDATE jobs SET excluded_reason = ? WHERE id = ?",
+            [("Duplicate listing from discovery feed", int(row["id"])) for row in rows],
+        )
+    return len(rows)
 
 
 def list_jobs_by_status(conn: sqlite3.Connection, status: Optional[str] = None) -> list[sqlite3.Row]:
@@ -262,6 +299,7 @@ def autopilot_candidates(
     min_score: int,
     limit: int,
     include_unknown_outside_us_uk: bool = False,
+    require_direct_ats: bool = True,
 ) -> list[sqlite3.Row]:
     """Return drafts that are safe enough to enter the application worker.
 
@@ -279,6 +317,11 @@ def autopilot_candidates(
           AND jobs.excluded_reason IS NULL
           AND match_scores.llm_score >= ?
           AND (
+              ? = 0
+              OR jobs.source LIKE 'greenhouse:%'
+              OR jobs.source LIKE 'lever:%'
+          )
+          AND (
               match_scores.eligibility IN ('worldwide', 'sponsors')
               OR (
                   ? = 1
@@ -294,12 +337,19 @@ def autopilot_candidates(
           AND NOT EXISTS (
               SELECT 1 FROM application_attempts attempts
               WHERE attempts.job_id = jobs.id
-                AND attempts.state IN ('queued', 'preparing', 'ready_for_submission', 'submitted')
+                -- Exceptions are terminal for this exact URL. Retrying an Adzuna/RemoteOK
+                -- page on every Telegram command only creates duplicate noise; a future
+                -- explicit retry can create a fresh attempt after its source URL is fixed.
+                AND attempts.state IN ('queued', 'preparing', 'ready_for_submission', 'submitted', 'exception', 'failed')
           )
-        ORDER BY match_scores.llm_score DESC, match_scores.embedding_similarity DESC
+        -- A direct employer ATS is actionable now. Aggregator listings may still be useful
+        -- for discovery, but should never starve a Greenhouse/Lever form behind them.
+        ORDER BY CASE WHEN jobs.source LIKE 'greenhouse:%' OR jobs.source LIKE 'lever:%' THEN 0 ELSE 1 END,
+                 CASE WHEN match_scores.eligibility IN ('worldwide', 'sponsors') THEN 0 ELSE 1 END,
+                 match_scores.llm_score DESC, match_scores.embedding_similarity DESC
         LIMIT ?
         """,
-        (min_score, int(include_unknown_outside_us_uk), limit),
+        (min_score, int(require_direct_ats), int(include_unknown_outside_us_uk), limit),
     ).fetchall()
 
 
@@ -347,3 +397,16 @@ def update_application_attempt(
 
 def get_application_attempt(conn: sqlite3.Connection, attempt_id: int) -> Optional[sqlite3.Row]:
     return conn.execute("SELECT * FROM application_attempts WHERE id = ?", (attempt_id,)).fetchone()
+
+
+def get_application_attempt_job(conn: sqlite3.Connection, attempt_id: int) -> Optional[sqlite3.Row]:
+    """Return an attempt together with the immutable job data it is applying to."""
+    return conn.execute(
+        """
+        SELECT application_attempts.*, jobs.title, jobs.company, jobs.description, jobs.url,
+               jobs.status AS job_status
+        FROM application_attempts JOIN jobs ON jobs.id = application_attempts.job_id
+        WHERE application_attempts.id = ?
+        """,
+        (attempt_id,),
+    ).fetchone()

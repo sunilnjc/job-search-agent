@@ -41,10 +41,19 @@ export function FilterBar({ jobs, filters, onChange }: Props) {
     onChange({ ...filters, regions: next });
   };
 
-  const hasActiveFilters = filters.roles.size > 0 || filters.regions.size > 0;
+  const hasActiveFilters = filters.roles.size > 0 || filters.regions.size > 0 || Boolean(filters.query);
 
   return (
     <div className="filter-bar">
+      <label className="job-search">
+        <span className="sr-only">Search jobs</span>
+        <input
+          type="search"
+          value={filters.query}
+          onChange={(event) => onChange({ ...filters, query: event.target.value })}
+          placeholder="Search title, company, or location"
+        />
+      </label>
       <div className="filter-group">
         <span className="filter-group-label">Role:</span>
         {ROLE_ORDER.map((role) => (
@@ -70,7 +79,7 @@ export function FilterBar({ jobs, filters, onChange }: Props) {
         ))}
       </div>
       {hasActiveFilters && (
-        <button className="filter-clear" onClick={() => onChange({ roles: new Set(), regions: new Set() })}>
+        <button className="filter-clear" onClick={() => onChange({ roles: new Set(), regions: new Set(), query: "" })}>
           Clear filters
         </button>
       )}

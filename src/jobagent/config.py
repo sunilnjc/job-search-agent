@@ -45,6 +45,9 @@ class Settings:
         self.autopilot_include_unknown_outside_us_uk = (
             os.getenv("AUTOPILOT_INCLUDE_UNKNOWN_OUTSIDE_US_UK", "false").lower() == "true"
         )
+        self.autopilot_browser_profile = ROOT / "playwright" / "profile"
+        self.autopilot_headless = os.getenv("AUTOPILOT_HEADLESS", "true").lower() == "true"
+        self.autopilot_require_direct_ats = os.getenv("AUTOPILOT_REQUIRE_DIRECT_ATS", "true").lower() == "true"
 
     def load_preferences(self) -> dict:
         if not self.preferences_path.exists():

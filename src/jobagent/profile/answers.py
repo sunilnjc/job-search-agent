@@ -59,7 +59,7 @@ QUESTION_PATTERNS: list[tuple[str, str, str]] = [
     (r"phone|mobile|contact number", "identity.phone", "Phone"),
     (r"e-?mail", "identity.email", "Email"),
     (r"full name|your name|legal name", "identity.full_name", "Full name"),
-    (r"where are you (based|located)|current location|city", "identity.location", "Location"),
+    (r"where are you (based|located)|where.*based|current location|city", "identity.location", "Location"),
     (r"gender", "voluntary_disclosures.gender", "Gender"),
     (r"ethnic|race", "voluntary_disclosures.ethnicity", "Ethnicity"),
     (r"veteran", "voluntary_disclosures.veteran_status", "Veteran status"),
