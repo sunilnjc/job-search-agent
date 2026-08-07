@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import type { Job, Status } from "../types";
 import type { JobFilters, RoleCategory } from "../filters";
 import { ROLE_LABELS, regionOf } from "../filters";
+import { useRunTrigger } from "../hooks/useRun";
+import { useExcludeJob } from "../hooks/useJobs";
 
 // Phone-first review flow: pick a stage, work down the list, act on each job.
 // "drafted" first — that's the queue with materials ready to submit.
@@ -32,6 +34,9 @@ const ROLE_ORDER: Exclude<RoleCategory, "other">[] = ["fde", "senior", "software
 export function MobileQueue({ jobs, onOpenJob, filters, onFiltersChange }: Props) {
   const [stage, setStage] = useState<Status>("drafted");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const { triggerAutopilot, triggerDirectApply, isTriggering, runStatus } = useRunTrigger();
+  const excludeJob = useExcludeJob();
+  const processing = isTriggering || runStatus?.status === "running";
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -87,7 +92,9 @@ export function MobileQueue({ jobs, onOpenJob, filters, onFiltersChange }: Props
         <div>
           <p className="mobile-eyebrow">YOUR APPLICATION DESK</p>
           <h2>{readyCount > 0 ? `${readyCount} ready to review` : "Your queue is clear"}</h2>
-          <p>{readyCount > 0 ? "Open a role, check the tailored documents, then apply." : "New matches will appear here after the next job run."}</p>
+          <p>{readyCount > 0 ? "Process the queue once; Telegram will send final-confirmation buttons and group exceptions." : "New matches will appear here after the next job run."}</p>
+          {readyCount > 0 && <button className="mq-process" disabled={processing} onClick={() => triggerAutopilot(undefined)}>{processing ? "Preparing queue…" : "Process Ready Queue"}</button>}
+          {runStatus && <p className="mq-process-status">{runStatus.log.at(-1) ?? (processing ? "Starting…" : "Done")}</p>}
         </div>
         <button className={hasFilters ? "mq-filter active" : "mq-filter"} onClick={() => setFiltersOpen(true)}>
           Filter{hasFilters ? " · On" : ""}
@@ -146,6 +153,18 @@ export function MobileQueue({ jobs, onOpenJob, filters, onFiltersChange }: Props
                   <div className="mq-card-actions">
                     <button className="mq-btn mq-btn-primary" onClick={() => onOpenJob(job.id)}>
                       Review application
+                    </button>
+                    {stage === "drafted" && (
+                      <button className="mq-btn mq-btn-direct" disabled={processing} onClick={() => triggerDirectApply(job.id)}>
+                        {processing ? "Preparing…" : "Direct Apply"}
+                      </button>
+                    )}
+                    <button
+                      className="mq-btn mq-btn-exclude"
+                      disabled={excludeJob.isPending}
+                      onClick={() => excludeJob.mutate({ id: job.id, reason: "Not a priority right now" })}
+                    >
+                      Exclude
                     </button>
                   </div>
                 </div>

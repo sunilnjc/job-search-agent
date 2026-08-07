@@ -20,23 +20,25 @@ export type Eligibility =
 
 export interface Job {
   id: number;
+  source: string;
   title: string;
   company: string;
   location: string;
   remote: boolean;
   country: string | null;
   url: string;
-  description: string;
+  description?: string;
   salary: string | null;
   status: Status;
   llm_score: number | null;
-  llm_reasoning: string | null;
-  embedding_similarity: number | null;
+  llm_reasoning?: string | null;
+  embedding_similarity?: number | null;
   eligibility: Eligibility;
   excluded_reason: string | null;
 }
 
 export interface JobDetail extends Job {
+  description: string;
   cover_letter: string | null;
   resume_tailoring: string | null;
   gap_analysis: string | null;
@@ -56,4 +58,13 @@ export type StatusSummary = Record<Status, number>;
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+export interface OutreachDraft {
+  id: number;
+  job_id: number;
+  recipient: string | null;
+  subject: string;
+  body: string;
+  status: string;
 }

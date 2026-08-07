@@ -12,6 +12,7 @@ identity:
   email: "you@example.com"
   phone: "+000 000 0000"
   location: "City, Country"
+  country: "Country"
   linkedin: "linkedin.com/in/your-handle"
   github: "github.com/your-handle"
   portfolio: NEEDS_INPUT
@@ -61,3 +62,11 @@ voluntary_disclosures:
   ethnicity: "decline to self-identify"
   veteran_status: "decline to self-identify"
   disability_status: "decline to self-identify"
+
+# Pre-approved application declarations. These are submitted verbatim when a form asks.
+application:
+  legal_acknowledgement: "Yes, I acknowledge."
+  work_authorization: "I require employer sponsorship/work authorization."
+  criminal_history: "No criminal history."
+  compensation: "Compensation is negotiable and can be discussed in line with market standards."
+  legal_claims: "No legal claims."

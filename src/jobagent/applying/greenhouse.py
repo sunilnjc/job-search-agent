@@ -7,6 +7,7 @@ from typing import Mapping, Optional
 
 from jobagent.config import settings
 from jobagent.profile import answers
+from jobagent.applying.ats import BROWSER_UA
 
 
 @dataclass(frozen=True)
@@ -30,9 +31,59 @@ def _identity() -> tuple[Optional[str], Optional[str], Optional[str], Optional[s
     )
 
 
+def _identity_location() -> tuple[Optional[str], Optional[str]]:
+    return _approved("identity.location"), _approved("identity.country")
+
+
 def _first(page, selector: str):
     locator = page.locator(selector)
     return locator.first if locator.count() else None
+
+
+def _wait_for_upload(page, timeout_ms: int = 12_000):
+    """N26 hydrates its embedded Greenhouse application form after page load.
+
+    `domcontentloaded` only guarantees the N26 shell, not the rendered form. Waiting for
+    the upload field prevents a false "not found" before its client-side form appears.
+    """
+    selector = "input[type='file'][name*='resume' i], input[type='file']"
+    locator = page.locator(selector)
+    try:
+        locator.wait_for(state="attached", timeout=timeout_ms)
+    except Exception:  # no form is a normal, reportable application exception
+        return None
+    return _first(page, selector)
+
+
+def preflight(job: Mapping[str, object]) -> SubmissionResult:
+    """Check that a standard Greenhouse form exposes a resume control before confirmation.
+
+    No fields are filled and no application is created here. This prevents a misleading
+    "packet ready" Telegram button for employer-hosted pages that only resemble Greenhouse.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return SubmissionResult("exception", "playwright_not_installed")
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(user_agent=BROWSER_UA)
+                page.goto(str(job["final_url"]), wait_until="domcontentloaded", timeout=45_000)
+                apply_button = _first(page, "#apply_button, a[href*='application'], a[href*='/apply'], a:has-text('Apply'), button:has-text('Apply')")
+                if apply_button:
+                    apply_button.click(timeout=10_000)
+                    page.wait_for_load_state("domcontentloaded", timeout=20_000)
+                if page.locator("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], .g-recaptcha, .h-captcha").count():
+                    return SubmissionResult("exception", "captcha_required")
+                if not _wait_for_upload(page):
+                    return SubmissionResult("exception", "resume_upload_field_not_found")
+                return SubmissionResult("ready_for_submission")
+            finally:
+                browser.close()
+    except Exception as exc:
+        return SubmissionResult("exception", f"greenhouse_preflight_error:{type(exc).__name__}")
 
 
 def submit(job: Mapping[str, object], resume: Path, cover_letter: Path) -> SubmissionResult:
@@ -47,6 +98,7 @@ def submit(job: Mapping[str, object], resume: Path, cover_letter: Path) -> Submi
         return SubmissionResult("exception", "playwright_not_installed")
 
     first_name, last_name, email, phone = _identity()
+    location, country = _identity_location()
     if not all((first_name, last_name, email)):
         return SubmissionResult("exception", "missing_approved_identity_answer")
     if not resume.is_file() or not cover_letter.is_file():
@@ -56,7 +108,8 @@ def submit(job: Mapping[str, object], resume: Path, cover_letter: Path) -> Submi
         with sync_playwright() as playwright:
             settings.autopilot_browser_profile.mkdir(parents=True, exist_ok=True)
             browser = playwright.chromium.launch_persistent_context(
-                str(settings.autopilot_browser_profile), headless=settings.autopilot_headless
+                str(settings.autopilot_browser_profile), headless=settings.autopilot_headless,
+                user_agent=BROWSER_UA,
             )
             try:
                 page = browser.pages[0] if browser.pages else browser.new_page()
@@ -78,11 +131,17 @@ def submit(job: Mapping[str, object], resume: Path, cover_letter: Path) -> Submi
                 }
                 if phone:
                     values["#phone, input[name='phone']"] = phone
+                if location:
+                    values["#location, input[name='location']"] = location
                 for selector, value in values.items():
                     field = _first(page, selector)
                     if field:
                         field.fill(value)
-                resume_field = _first(page, "input[type='file'][name*='resume' i], input[type='file']")
+                if country:
+                    country_field = _first(page, "#country, select[name='country']")
+                    if country_field:
+                        country_field.select_option(label=country)
+                resume_field = _wait_for_upload(page)
                 if not resume_field:
                     return SubmissionResult("exception", "resume_upload_field_not_found")
                 resume_field.set_input_files(str(resume))

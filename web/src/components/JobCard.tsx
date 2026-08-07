@@ -46,6 +46,7 @@ export function JobCard({ job, onOpen }: Props) {
       <div className="job-card-title">{job.title}</div>
       <div className="job-card-company">{job.company}</div>
       <div className="job-card-location">{job.location}{job.remote ? " · Remote" : ""}</div>
+      <div className="job-card-source">{job.source.replace(":", " · ")}</div>
       <div className="job-card-actions" onClick={(e) => e.stopPropagation()}>
         {prevStatus && (
           <button onClick={() => updateStatus.mutate({ id: job.id, status: prevStatus as Status })}>

@@ -23,15 +23,16 @@ logger = logging.getLogger(__name__)
 
 HELP_TEXT = (
     "<b>Job Search Agent</b>\n\n"
-    "/today — eligible high-match roles ready to review\n"
-    "/matches — same as /today\n"
+    "/today — newly surfaced eligible high-match roles\n"
+    "/matches — all current eligible high-match roles\n"
     "/autopilot — prepare strictly eligible Ready applications\n"
     "/status — pipeline counts\n\n"
     "<b>📝 Prepare application</b> writes the cover letter and tailored resume for a role, "
     "then sends them here; <b>📄 Send documents</b> re-sends them once they exist. "
     "<b>Review packet</b> opens the private phone dashboard.\n\n"
-    "The bot never submits anything — <b>✓ Mark applied</b> only records an application "
-    "after you have submitted it yourself on the company site."
+    "<b>Confirm submit</b> is shown only after the application packet has been prepared. "
+    "It is the final per-application confirmation; CAPTCHA, unclear facts, and eligibility "
+    "questions always stop for your review."
 )
 
 
@@ -233,6 +234,11 @@ class TelegramBot:
                 f"No drafted roles currently meet the autopilot rule: score 9+ and {eligibility_note}.",
             )
             return 0
+        self.send_autopilot_results(chat_id, results)
+        return len(results)
+
+    def send_autopilot_results(self, chat_id: str | int, results) -> None:
+        """Deliver batched preparation results from either /autopilot or the dashboard."""
         lines = ["<b>Application preparation</b>"]
         buttons: list[list[dict[str, str]]] = []
         for result in results:
@@ -244,7 +250,6 @@ class TelegramBot:
                 reason = html.escape((result.reason or "needs review").replace("_", " "))
                 lines.append(f"• {role}: <b>action required</b> ({reason}).")
         self.send_text(chat_id, "\n".join(lines), {"inline_keyboard": buttons} if buttons else None)
-        return len(results)
 
     def handle_message(self, message: Mapping[str, Any]) -> None:
         chat_id = message.get("chat", {}).get("id")
@@ -270,7 +275,14 @@ class TelegramBot:
 
         if command in {"/start", "/help"}:
             self.send_text(chat_id, HELP_TEXT)
-        elif command in {"/today", "/matches"}:
+        elif command == "/today":
+            sent = self.send_matches(chat_id, only_unnotified=True)
+            if not sent:
+                self.send_text(
+                    chat_id,
+                    "No new eligible roles since your last /today. Use /matches to review the current queue again.",
+                )
+        elif command == "/matches":
             self.send_matches(chat_id)
         elif command == "/status":
             self.send_status(chat_id)

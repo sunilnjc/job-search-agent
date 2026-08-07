@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import Mock, patch
 
 from jobagent.applying.ats import (
     ATSDetection,
@@ -9,6 +10,8 @@ from jobagent.applying.ats import (
     detect_from_url,
     is_aggregator,
 )
+from jobagent.sources.ats_boards import ATSBoardsSource
+from jobagent.sources.validation import check_live_job_link
 
 
 class DetectFromUrlTests(unittest.TestCase):
@@ -98,6 +101,49 @@ class ApplyLinkSelectionTests(unittest.TestCase):
                 [("https://www.adzuna.com/details/99", "Apply")],
             )
         )
+
+
+class DirectBoardSourceTests(unittest.TestCase):
+    @patch("jobagent.sources.ats_boards.httpx.get")
+    def test_ashby_feed_becomes_direct_employer_postings(self, get):
+        response = Mock(status_code=200)
+        response.json.return_value = {"jobs": [{
+            "id": "a1", "title": "Senior Software Engineer", "location": "Remote — Europe",
+            "jobUrl": "https://jobs.ashbyhq.com/acme/a1", "descriptionPlain": "Build systems",
+            "address": {"addressCountry": "Germany"},
+        }]}
+        get.return_value = response
+        jobs = ATSBoardsSource()._search_ashby("acme")
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].source, "ashby:acme")
+        self.assertEqual(jobs[0].country, "Germany")
+
+
+class DirectLinkValidationTests(unittest.TestCase):
+    @patch("jobagent.sources.validation.httpx.get")
+    def test_expired_page_is_rejected(self, get):
+        response = Mock(status_code=200, text="This job is no longer available")
+        response.url = "https://jobs.example/expired"
+        get.return_value = response
+        result = check_live_job_link("https://jobs.example/expired")
+        self.assertFalse(result.available)
+        self.assertIn("unavailable", result.reason)
+
+    @patch("jobagent.sources.validation.httpx.get")
+    def test_live_page_is_accepted(self, get):
+        response = Mock(status_code=200, text="Apply for this opportunity")
+        response.url = "https://jobs.example/live"
+        get.return_value = response
+        self.assertTrue(check_live_job_link("https://jobs.example/live").available)
+
+    @patch("jobagent.sources.validation.httpx.get")
+    def test_access_denied_requires_manual_check_not_expiry(self, get):
+        response = Mock(status_code=403, text="Access denied")
+        response.url = "https://jobs.example/protected"
+        get.return_value = response
+        result = check_live_job_link("https://jobs.example/protected")
+        self.assertIsNone(result.available)
+        self.assertIn("blocked", result.reason)
 
 
 if __name__ == "__main__":

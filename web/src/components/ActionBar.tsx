@@ -1,7 +1,7 @@
 import { useRunTrigger } from "../hooks/useRun";
 
 export function ActionBar() {
-  const { triggerFetch, triggerMatch, isTriggering, runStatus, clearRun } = useRunTrigger();
+  const { triggerFetch, triggerMatch, triggerAutopilot, isTriggering, runStatus, clearRun } = useRunTrigger();
   const running = runStatus?.status === "running";
 
   return (
@@ -12,6 +12,9 @@ export function ActionBar() {
         </button>
         <button disabled={isTriggering || running} onClick={() => triggerMatch(undefined)}>
           Match jobs
+        </button>
+        <button disabled={isTriggering || running} onClick={() => triggerAutopilot(undefined)}>
+          Process Ready Queue
         </button>
         {runStatus && !running && (
           <button className="action-bar-clear" onClick={clearRun}>

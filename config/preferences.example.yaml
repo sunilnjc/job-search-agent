@@ -41,7 +41,14 @@ title_filter_keywords:
 
 excluded_companies: []
 
-# Greenhouse/Lever board tokens to poll, e.g. "stripe" -> boards-api.greenhouse.io/v1/boards/stripe/jobs
+# Direct employer career-board tokens to poll. These are live official ATS feeds, not
+# cached aggregator links. Add companies you genuinely want to follow.
+# Examples: "stripe" -> boards-api.greenhouse.io/v1/boards/stripe/jobs
 ats_boards:
   greenhouse: []
   lever: []
+  ashby: []
+
+# Keep this as your intentional company watchlist. The board tokens above are what the
+# collector uses; this list makes the source of those tokens clear when you maintain it.
+company_watchlist: []

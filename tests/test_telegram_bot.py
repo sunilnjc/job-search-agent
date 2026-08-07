@@ -200,6 +200,16 @@ class HandleMessageTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertIn("/today", sent[0][1])
 
+    def test_today_uses_the_unnotified_queue_but_matches_does_not(self):
+        bot, _ = _offline_bot(self)
+        with mock.patch.object(bot, "send_matches", return_value=1) as send_matches:
+            bot.handle_message({"chat": {"id": 123}, "text": "/today"})
+        self.assertEqual(send_matches.call_args.kwargs["only_unnotified"], True)
+
+        with mock.patch.object(bot, "send_matches", return_value=1) as send_matches:
+            bot.handle_message({"chat": {"id": 123}, "text": "/matches"})
+        self.assertEqual(send_matches.call_args.kwargs, {})
+
 
 class JobDocumentTests(unittest.TestCase):
     ROW = {

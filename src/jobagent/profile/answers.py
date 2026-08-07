@@ -42,6 +42,9 @@ class Answer:
 # Question patterns → dotted path in answers.yaml. Ordered: the first match wins, so put
 # the more specific patterns first (expected salary before generic salary, etc.).
 QUESTION_PATTERNS: list[tuple[str, str, str]] = [
+    (r"criminal|convict|felony|offen[cs]e", "application.criminal_history", "Criminal history"),
+    (r"legal claim|lawsuit|litigation|legal action", "application.legal_claims", "Legal claims"),
+    (r"acknowledg|confirm.*(privacy|policy|notice)|consent", "application.legal_acknowledgement", "Acknowledgement"),
     (r"visa|sponsor|work permit|right to work|authori[sz]ed to work|work authori", "work_authorization.summary", "Work authorization"),
     (r"relocat", "work_authorization.relocation_notes", "Relocation"),
     (r"notice period|how (much|long).*notice|resign", "availability.notice_period", "Notice period"),
@@ -108,6 +111,17 @@ def answer_for(question: str, data: Optional[dict] = None) -> Optional[Answer]:
     for pattern, dotted, label in QUESTION_PATTERNS:
         if re.search(pattern, text):
             answer = get_field(dotted, data)
+            # A reusable policy can safely fill an otherwise-unset salary/work-authorisation
+            # field, while a role-specific value in the established profile remains preferred.
+            fallback = {
+                "work_authorization.summary": "application.work_authorization",
+                "compensation.expected_salary": "application.compensation",
+                "compensation.current_salary": "application.compensation",
+            }.get(dotted)
+            if answer.needs_input and fallback:
+                policy_answer = get_field(fallback, data)
+                if not policy_answer.needs_input:
+                    answer = policy_answer
             return Answer(field=answer.field, value=answer.value, label=label)
     return None
 

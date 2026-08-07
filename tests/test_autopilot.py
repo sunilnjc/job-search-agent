@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from jobagent.applying.ats import ATSDetection
+from jobagent.applying.greenhouse import SubmissionResult
 from jobagent.applying.autopilot import process_ready_queue
 from jobagent.config import settings
 from jobagent.service import slugify
@@ -50,12 +51,16 @@ class AutopilotTests(unittest.TestCase):
         (folder / "tailored_resume.pdf").write_bytes(b"pdf")
         return job_id
 
+    @staticmethod
+    def _preflight(_job):
+        return SubmissionResult("ready_for_submission")
+
     def test_only_explicitly_eligible_score_nine_jobs_enter_queue_by_default(self):
         accepted = self._seed(eligibility="worldwide", score=9)
         self._seed(eligibility="unknown", score=10, url="https://boards.greenhouse.io/unknown/jobs/2")
         self._seed(eligibility="sponsors", score=8, url="https://boards.greenhouse.io/low/jobs/3")
 
-        results = process_ready_queue(db_path=self.db_path, resolver=lambda url: ATSDetection("greenhouse", url, False, False))
+        results = process_ready_queue(db_path=self.db_path, resolver=lambda url: ATSDetection("greenhouse", url, False, False), greenhouse_preflight=self._preflight)
 
         self.assertEqual([r.job_id for r in results], [accepted])
         self.assertEqual(results[0].state, "ready_for_submission")
@@ -76,6 +81,7 @@ class AutopilotTests(unittest.TestCase):
         results = process_ready_queue(
             db_path=self.db_path,
             resolver=lambda url: ATSDetection("greenhouse", url, False, False),
+            greenhouse_preflight=self._preflight,
         )
         self.assertEqual(results, [])
 
@@ -83,6 +89,7 @@ class AutopilotTests(unittest.TestCase):
         results = process_ready_queue(
             db_path=self.db_path,
             resolver=lambda url: ATSDetection("greenhouse", url, False, False),
+            greenhouse_preflight=self._preflight,
         )
         self.assertEqual([r.job_id for r in results], [unknown])
 
@@ -100,8 +107,8 @@ class AutopilotTests(unittest.TestCase):
     def test_ready_attempt_is_not_repeated(self):
         self._seed()
         resolver = lambda url: ATSDetection("greenhouse", url, False, False)
-        self.assertEqual(len(process_ready_queue(db_path=self.db_path, resolver=resolver)), 1)
-        self.assertEqual(process_ready_queue(db_path=self.db_path, resolver=resolver), [])
+        self.assertEqual(len(process_ready_queue(db_path=self.db_path, resolver=resolver, greenhouse_preflight=self._preflight)), 1)
+        self.assertEqual(process_ready_queue(db_path=self.db_path, resolver=resolver, greenhouse_preflight=self._preflight), [])
 
     def test_exception_attempt_is_not_repeated_automatically(self):
         self._seed()
@@ -120,6 +127,7 @@ class AutopilotTests(unittest.TestCase):
         results = process_ready_queue(
             db_path=self.db_path,
             resolver=lambda url: ATSDetection("greenhouse", url, False, False),
+            greenhouse_preflight=self._preflight,
         )
         self.assertEqual([result.job_id for result in results], [direct])
         self.assertNotEqual(direct, aggregator)

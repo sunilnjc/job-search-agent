@@ -5,8 +5,15 @@ tailored application materials, and track application status.
 
 ## How it works
 
-1. **Fetch** — pulls postings from Adzuna, RemoteOK, WeWorkRemotely, and configured
-   Greenhouse/Lever company boards into a local SQLite database.
+1. **Fetch** — pulls postings from discovery feeds plus configured official Greenhouse,
+   Lever, and Ashby company boards into a local SQLite database. Direct board URLs are
+   checked again before material generation, so an expired employer role is excluded
+   rather than appearing in the Ready queue.
+
+Adzuna is disabled by default because it is an aggregator and can serve stale or
+region-restricted links. Existing Adzuna records are moved to **Excluded**; use direct
+employer boards for application decisions. Set `ENABLE_ADZUNA=true` only if you want it
+as a research feed, never as an application source.
 2. **Match** — screens each posting through a title keyword filter and a
    work-eligibility classifier (skips roles restricted to countries where you lack
    work authorization), then scores survivors with a local embedding similarity

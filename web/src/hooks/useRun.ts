@@ -16,6 +16,16 @@ export function useRunTrigger() {
     onSuccess: (data) => setRunId(data.run_id),
   });
 
+  const autopilotMutation = useMutation({
+    mutationFn: (limit?: number) => api.triggerAutopilot(limit),
+    onSuccess: (data) => setRunId(data.run_id),
+  });
+
+  const directApplyMutation = useMutation({
+    mutationFn: (id: number) => api.triggerDirectApply(id),
+    onSuccess: (data) => setRunId(data.run_id),
+  });
+
   const runStatus = useQuery({
     queryKey: ["run", runId],
     queryFn: () => api.getRun(runId as string),
@@ -33,7 +43,9 @@ export function useRunTrigger() {
   return {
     triggerFetch: fetchMutation.mutate,
     triggerMatch: matchMutation.mutate,
-    isTriggering: fetchMutation.isPending || matchMutation.isPending,
+    triggerAutopilot: autopilotMutation.mutate,
+    triggerDirectApply: directApplyMutation.mutate,
+    isTriggering: fetchMutation.isPending || matchMutation.isPending || autopilotMutation.isPending || directApplyMutation.isPending,
     runStatus: runStatus.data,
     clearRun: () => setRunId(null),
   };

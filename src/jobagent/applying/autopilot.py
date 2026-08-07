@@ -45,6 +45,7 @@ def process_job(
     *,
     resolver: Callable[[str], ats.ATSDetection] = ats.resolve_for_application,
     profile: Any = None,
+    greenhouse_preflight: Optional[Callable[[Mapping[str, object]], Any]] = None,
 ) -> AutopilotResult:
     """Prepare a single strict-eligibility job, preserving every outcome in SQLite."""
     attempt_id = db.create_application_attempt(conn, int(job["id"]))
@@ -81,6 +82,15 @@ def process_job(
             )
             return _result(job, "exception", reason="unsupported_or_unresolved_ats", attempt_id=attempt_id, final_url=detected.final_url)
 
+        if detected.ats == "greenhouse" and greenhouse_preflight is not None:
+            preflight_result = greenhouse_preflight({"final_url": detected.final_url})
+            if preflight_result.state != "ready_for_submission":
+                db.update_application_attempt(
+                    conn, attempt_id, state="exception", ats=detected.ats,
+                    final_url=detected.final_url, reason=preflight_result.reason, details_json=metadata,
+                )
+                return _result(job, "exception", reason=preflight_result.reason, attempt_id=attempt_id, final_url=detected.final_url)
+
         # A platform-specific browser handler will continue from this recorded checkpoint.
         # Never treat a prepared packet as a submitted application.
         db.update_application_attempt(
@@ -100,6 +110,7 @@ def process_ready_queue(
     db_path: Optional[Path] = None,
     resolver: Callable[[str], ats.ATSDetection] = ats.resolve_for_application,
     profile: Any = None,
+    greenhouse_preflight: Optional[Callable[[Mapping[str, object]], Any]] = None,
 ) -> list[AutopilotResult]:
     """Process a bounded batch of explicitly eligible drafted roles.
 
@@ -116,7 +127,36 @@ def process_ready_queue(
             include_unknown_outside_us_uk=settings.autopilot_include_unknown_outside_us_uk,
             require_direct_ats=settings.autopilot_require_direct_ats,
         )
-        return [process_job(conn, job, resolver=resolver, profile=profile) for job in jobs]
+        if greenhouse_preflight is None:
+            from jobagent.applying.greenhouse import preflight
+
+            greenhouse_preflight = preflight
+
+        return [
+            process_job(conn, job, resolver=resolver, profile=profile, greenhouse_preflight=greenhouse_preflight)
+            for job in jobs
+        ]
+
+
+def process_direct_apply_job(
+    job_id: int,
+    *,
+    db_path: Optional[Path] = None,
+    resolver: Callable[[str], ats.ATSDetection] = ats.resolve_for_application,
+    profile: Any = None,
+) -> AutopilotResult:
+    """Prepare one Direct Apply request from a Ready card."""
+    db.init_db(db_path)
+    with db.connection(db_path) as conn:
+        job = db.direct_apply_candidate(conn, job_id)
+        if not job:
+            existing = db.get_job(conn, job_id)
+            if not existing:
+                raise ValueError(f"No job with id {job_id}")
+            return _result(existing, "exception", reason=db.direct_apply_block_reason(conn, job_id))
+        from jobagent.applying.greenhouse import preflight
+
+        return process_job(conn, job, resolver=resolver, profile=profile, greenhouse_preflight=preflight)
 
 
 def submit_attempt(attempt_id: int, db_path: Optional[Path] = None) -> AutopilotResult:

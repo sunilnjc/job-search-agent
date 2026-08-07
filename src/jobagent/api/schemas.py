@@ -5,22 +5,32 @@ from typing import Optional
 from pydantic import BaseModel
 
 
-class JobOut(BaseModel):
+class JobListOut(BaseModel):
+    """Small job representation used by the board and mobile queue.
+
+    Full descriptions are often tens of kilobytes each.  Returning thousands of
+    them before the user has opened a job makes a phone wait on a huge download.
+    """
+
     id: int
+    source: str
     title: str
     company: str
     location: str
     remote: bool
     country: Optional[str] = None
     url: str
-    description: str
     salary: Optional[str] = None
     status: str
     llm_score: Optional[int] = None
-    llm_reasoning: Optional[str] = None
-    embedding_similarity: Optional[float] = None
     eligibility: str = "unknown"
     excluded_reason: Optional[str] = None
+
+
+class JobOut(JobListOut):
+    description: str
+    llm_reasoning: Optional[str] = None
+    embedding_similarity: Optional[float] = None
 
 
 class JobDetailOut(JobOut):
@@ -63,3 +73,16 @@ class RunOut(BaseModel):
     run_id: str
     status: str
     log: list[str]
+
+
+class OutreachDraftOut(BaseModel):
+    id: int
+    job_id: int
+    recipient: Optional[str] = None
+    subject: str
+    body: str
+    status: str
+
+
+class OutreachRecipientUpdate(BaseModel):
+    recipient: str

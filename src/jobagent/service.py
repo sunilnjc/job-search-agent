@@ -13,10 +13,19 @@ from jobagent.sources.ats_boards import ATSBoardsSource
 from jobagent.sources.manual_url import ManualURLSource
 from jobagent.sources.remoteok import RemoteOKSource
 from jobagent.sources.weworkremotely import WeWorkRemotelySource
+from jobagent.sources.validation import check_live_job_link
 from jobagent.storage import db
 from jobagent.tracking import pipeline
 
-BULK_SOURCES = [RemoteOKSource(), WeWorkRemotelySource(), AdzunaSource(), ATSBoardsSource()]
+def configured_bulk_sources():
+    """Direct boards are the default. Aggregator feeds are explicit opt-ins only."""
+    sources = []
+    if settings.enable_discovery_feeds:
+        sources.extend([RemoteOKSource(), WeWorkRemotelySource()])
+        if settings.enable_adzuna:
+            sources.append(AdzunaSource())
+    sources.append(ATSBoardsSource())
+    return sources
 
 LLM_SCORE_THRESHOLD = 6
 EMBEDDING_SIMILARITY_FLOOR = 0.2
@@ -78,7 +87,7 @@ def run_fetch(url: Optional[str] = None, on_progress: ProgressFn = print) -> int
 
     total = 0
     with db.connection() as conn:
-        for source in BULK_SOURCES:
+        for source in configured_bulk_sources():
             try:
                 postings = source.search()
             except Exception as exc:  # noqa: BLE001 - one source failing shouldn't kill the run
@@ -86,9 +95,28 @@ def run_fetch(url: Optional[str] = None, on_progress: ProgressFn = print) -> int
                 continue
             for posting in postings:
                 db.upsert_job(conn, posting)
+            # Direct ATS feeds are authoritative for only their own board. Reconcile
+            # successful boards so old Adyen-style records disappear on the next refresh.
+            if isinstance(source, ATSBoardsSource):
+                for board_source in source.successful_sources:
+                    live_urls = {posting.url for posting in postings if posting.source == board_source}
+                    retired = db.reconcile_direct_source(conn, board_source, live_urls)
+                    if retired:
+                        on_progress(f"[{board_source}] excluded {retired} role(s) no longer listed directly.")
             on_progress(f"[{source.name}] fetched {len(postings)} postings")
             total += len(postings)
         apply_sponsorship_exclusions(conn, on_progress)
+        # Existing Adzuna rows remain auditable in Excluded, but are never shown as
+        # actionable after the user chose a direct-employer-only application board.
+        hidden_aggregators = conn.execute(
+            """
+            UPDATE jobs SET excluded_reason = 'Aggregator listing — use a direct employer careers page instead'
+            WHERE source IN ('adzuna', 'remoteok', 'weworkremotely') AND excluded_reason IS NULL
+              AND status IN ('new', 'matched', 'drafted')
+            """
+        ).rowcount
+        if hidden_aggregators:
+            on_progress(f"Excluded {hidden_aggregators} aggregator listing(s) from the active board.")
         duplicates = db.exclude_duplicate_aggregator_listings(conn)
         if duplicates:
             on_progress(f"Excluded {duplicates} duplicate discovery-feed listings.")
@@ -206,6 +234,13 @@ def draft_job(conn, job, profile, on_progress: ProgressFn = print) -> None:
         parse_tailoring_notes,
     )
     from jobagent.drafting.resume_tailor import draft_resume_tailoring
+
+    if job["source"].split(":", 1)[0] in {"greenhouse", "lever", "ashby"}:
+        link = check_live_job_link(job["url"])
+        db.record_link_check(conn, job["id"], link.available)
+        if link.available is False:
+            db.set_excluded(conn, job["id"], link.reason or "Direct role unavailable")
+            raise ValueError(link.reason or "Direct role unavailable")
 
     cover_letter = draft_cover_letter(profile, job["title"], job["company"], job["description"])
     resume_notes = draft_resume_tailoring(profile, job["title"], job["company"], job["description"])

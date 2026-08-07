@@ -17,7 +17,10 @@ from jobagent.api.schemas import (
     ChatResponse,
     ExcludeUpdate,
     JobDetailOut,
+    JobListOut,
     JobOut,
+    OutreachDraftOut,
+    OutreachRecipientUpdate,
     RunOut,
     RunTrigger,
     StatusUpdate,
@@ -38,6 +41,8 @@ from jobagent.profile.resume_parser import parse_resume
 from jobagent.service import slugify
 from jobagent.storage import db
 from jobagent.tracking import pipeline
+from jobagent.outreach import draft_outreach_email, find_public_recruiting_inbox, send_outreach_email
+from jobagent.sources.validation import check_live_job_link
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +75,7 @@ def get_profile():
 def _row_to_job(row) -> JobOut:
     return JobOut(
         id=row["id"],
+        source=row["source"],
         title=row["title"],
         company=row["company"],
         location=row["location"],
@@ -117,10 +123,19 @@ def _read_artifact(job_row, filename: str) -> str | None:
     return path.read_text() if path.exists() else None
 
 
-@app.get("/api/jobs", response_model=list[JobOut])
+@app.get("/api/jobs", response_model=list[JobListOut])
 def list_jobs():
     with db.connection() as conn:
-        return [_row_to_job(r) for r in db.list_jobs_with_scores(conn)]
+        # The board only needs summary fields.  Keep descriptions for the
+        # individual-job endpoint so the initial mobile request stays small.
+        return [
+            JobListOut(
+                **_row_to_job(r).model_dump(
+                    exclude={"description", "llm_reasoning", "embedding_similarity"}
+                )
+            )
+            for r in db.list_jobs_with_scores(conn)
+        ]
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobDetailOut)
@@ -183,6 +198,13 @@ def generate_draft(job_id: int):
         if not job:
             raise HTTPException(404, f"No job with id {job_id}")
 
+        if job["source"].split(":", 1)[0] in {"greenhouse", "lever", "ashby"}:
+            link = check_live_job_link(job["url"])
+            db.record_link_check(conn, job_id, link.available)
+            if link.available is False:
+                db.set_excluded(conn, job_id, link.reason or "Direct role unavailable")
+                raise HTTPException(409, link.reason or "Direct role unavailable")
+
         profile = get_profile()
         cover_letter = draft_cover_letter(profile, job["title"], job["company"], job["description"])
         resume_notes = draft_resume_tailoring(profile, job["title"], job["company"], job["description"])
@@ -207,6 +229,71 @@ def generate_draft(job_id: int):
         "resume_tailoring": resume_notes,
         "has_resume_docx": has_resume_docx,
     }
+
+
+@app.post("/api/jobs/{job_id}/validate")
+def validate_job_link(job_id: int):
+    """Manually re-check a role already on the board and hide it if it has expired."""
+    with db.connection() as conn:
+        job = db.get_job(conn, job_id)
+        if not job:
+            raise HTTPException(404, f"No job with id {job_id}")
+        result = check_live_job_link(job["url"])
+        db.record_link_check(conn, job_id, result.available)
+        if result.available is False:
+            db.set_excluded(conn, job_id, result.reason or "Job link unavailable")
+        return {"available": result.available, "reason": result.reason, "final_url": result.final_url}
+
+
+def _outreach_out(row) -> OutreachDraftOut:
+    return OutreachDraftOut(id=row["id"], job_id=row["job_id"], recipient=row["recipient"], subject=row["subject"], body=row["body"], status=row["status"])
+
+
+@app.post("/api/jobs/{job_id}/outreach", response_model=OutreachDraftOut)
+def create_outreach_draft(job_id: int):
+    """Create a reviewable email draft; only public role inboxes are discovered."""
+    with db.connection() as conn:
+        job = db.get_job(conn, job_id)
+        if not job:
+            raise HTTPException(404, f"No job with id {job_id}")
+        recipient = find_public_recruiting_inbox(job["url"], job["description"])
+        subject, body = draft_outreach_email(
+            resume_text=get_profile().raw_text,
+            title=job["title"], company=job["company"], description=job["description"],
+        )
+        db.save_outreach_draft(conn, job_id, recipient, subject, body)
+        return _outreach_out(db.get_outreach_draft(conn, job_id))
+
+
+@app.get("/api/jobs/{job_id}/outreach", response_model=OutreachDraftOut)
+def get_outreach_draft(job_id: int):
+    with db.connection() as conn:
+        draft = db.get_outreach_draft(conn, job_id)
+        if not draft:
+            raise HTTPException(404, "No outreach draft generated yet")
+        return _outreach_out(draft)
+
+
+@app.post("/api/jobs/{job_id}/outreach/send", response_model=OutreachDraftOut)
+def send_outreach_draft(job_id: int, body: OutreachRecipientUpdate):
+    """External side effect: invoked only by the explicit Send button after review."""
+    with db.connection() as conn:
+        job = db.get_job(conn, job_id)
+        draft = db.get_outreach_draft(conn, job_id)
+        if not job or not draft:
+            raise HTTPException(404, "Create the outreach draft first")
+        recipient = body.recipient.strip()
+        if not recipient or "@" not in recipient:
+            raise HTTPException(400, "Enter a valid recipient before sending")
+        folder = settings.output_dir / slugify(f"{job['company']}-{job['title']}")
+        attachments = [folder / "tailored_resume.pdf", folder / "cover_letter.pdf"]
+        try:
+            send_outreach_email(recipient, draft["subject"], draft["body"], attachments)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        db.save_outreach_draft(conn, job_id, recipient, draft["subject"], draft["body"])
+        db.mark_outreach_sent(conn, job_id)
+        return _outreach_out(db.get_outreach_draft(conn, job_id))
 
 
 @app.get("/api/jobs/{job_id}/resume-docx")
@@ -356,6 +443,18 @@ def trigger_fetch(body: RunTrigger):
 @app.post("/api/runs/match", response_model=RunOut)
 def trigger_match(body: RunTrigger):
     run_id = runs.start_match(limit=body.limit)
+    return RunOut(run_id=run_id, status="running", log=[])
+
+
+@app.post("/api/runs/autopilot", response_model=RunOut)
+def trigger_autopilot(body: RunTrigger):
+    run_id = runs.start_autopilot(limit=body.limit)
+    return RunOut(run_id=run_id, status="running", log=[])
+
+
+@app.post("/api/runs/jobs/{job_id}/direct-apply", response_model=RunOut)
+def trigger_direct_apply(job_id: int):
+    run_id = runs.start_direct_apply(job_id)
     return RunOut(run_id=run_id, status="running", log=[])
 
 
