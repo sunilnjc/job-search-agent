@@ -11,6 +11,8 @@ import { ExcludedList } from "./components/ExcludedList";
 import { ActionBar } from "./components/ActionBar";
 import { FilterBar } from "./components/FilterBar";
 import { JobDetailModal } from "./components/JobDetailModal";
+import BetaApp from "./beta/BetaApp";
+import { betaMode } from "./beta/supabase";
 import { applyFilters } from "./filters";
 import type { JobFilters } from "./filters";
 import "./App.css";
@@ -24,6 +26,8 @@ const VIEW_LABELS: Record<View, string> = {
 };
 
 function App() {
+  if (betaMode) return <BetaApp />;
+
   const { data: jobs, isLoading, error } = useJobs();
   const [openJobId, setOpenJobId] = useState<number | null>(null);
   const [view, setView] = useState<View>("board");

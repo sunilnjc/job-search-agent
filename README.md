@@ -1,272 +1,237 @@
 # Job Search Agent
 
-A personal job-search pipeline: fetch listings, rank them against your resume, draft
-tailored application materials, and track application status.
+A private, mobile-friendly job-application assistant for finding fresh, eligible software-engineering opportunities; ranking them against a real candidate profile; preparing grounded application material; and safely assisting with submission.
 
-## How it works
+The goal is **a small, explainable shortlist of worthwhile roles**, not thousands of unfiltered listings.
 
-1. **Fetch** — pulls postings from discovery feeds plus configured official Greenhouse,
-   Lever, and Ashby company boards into a local SQLite database. Direct board URLs are
-   checked again before material generation, so an expired employer role is excluded
-   rather than appearing in the Ready queue.
+> Full product, architecture, prompt, security, and roadmap reference: [Job Search Agent Blueprint](docs/job-search-agent-blueprint.md)
 
-Adzuna is disabled by default because it is an aggregator and can serve stale or
-region-restricted links. Existing Adzuna records are moved to **Excluded**; use direct
-employer boards for application decisions. Set `ENABLE_ADZUNA=true` only if you want it
-as a research feed, never as an application source.
-2. **Match** — screens each posting through a title keyword filter and a
-   work-eligibility classifier (skips roles restricted to countries where you lack
-   work authorization), then scores survivors with a local embedding similarity
-   prefilter and an LLM fit rating 1-10. Set `RANK_PROVIDER=openai` in `.env` to
-   rate with `gpt-4o-mini` (much better judgment than a small local model, costs
-   pennies) or leave as `ollama` for fully free local rating.
-3. **Review** — lists your top-ranked unreviewed jobs in the terminal.
-4. **Draft** — for a job you pick, calls the Claude API to generate a tailored cover
-   letter and resume bullet suggestions, written to `output/<company>-<title>/`.
-5. **Status** — tracks each job through new -> matched -> drafted -> applied ->
-   interviewing -> rejected/offer.
+## What it does
 
-The application worker can prepare a strictly eligible Ready queue, but it never submits
-silently. A job is only marked applied after a browser handler observes the employer's
-confirmation page; CAPTCHA, OTP/2FA, unclear work authorization, unfamiliar questions, and
-upload errors stop as an exception for you to handle.
+- Collects jobs from official Greenhouse, Lever, and Ashby employer boards, plus individual job URLs supplied by the user.
+- Treats Adzuna, RemoteOK, and We Work Remotely as optional discovery sources rather than application sources.
+- Removes broken/expired links, duplicates, unsuitable titles, and roles incompatible with the candidate's work-authorisation policy.
+- Ranks roles, tracks pipeline status, and shows a responsive React mobile/PWA interface.
+- Generates tailored resumes, cover letters, gap analyses, and grounded application answers.
+- Provides a private Telegram companion for notifications, documents, queue preparation, and exceptions.
+- Supports incremental ATS automation while stopping for CAPTCHA, OTP/2FA, unclear questions, sponsorship ambiguity, and unsupported forms.
+- Records application attempts and only marks a role as applied after confirmation is observed.
 
-## Private Telegram companion
+## Application lifecycle
 
-The optional Telegram companion is a private mobile control surface: it sends high-score roles
-that survived the eligibility screen, can deliver that job's cover letter and tailored resume
-straight into the chat, opens the existing private PWA for full document review, and lets you
-mark a job applied or exclude it. It does **not** send API keys through Telegram and it does
-**not** silently submit applications on external sites.
-
-Eligibility is enforced by *excluding* roles that need work authorization you don't have — the
-same screen `jobagent match` applies — rather than by requiring a posting to explicitly advertise
-sponsorship. Most descriptions never say either way (Adzuna serves truncated snippets), so
-demanding an explicit "we sponsor" tag would filter the queue down to almost nothing. Roles that
-*do* advertise sponsorship or worldwide-remote are ranked first.
-
-1. Create a bot with `@BotFather`, then add its token to the local `.env`:
-
-   ```bash
-   TELEGRAM_BOT_TOKEN=...
-   TELEGRAM_DASHBOARD_URL=http://your-tailscale-ip:8842
-   ```
-
-2. Start the bot once and message it `/start`. It will reply with your private chat ID:
-
-   ```bash
-   jobagent telegram run
-   # add the returned value to .env as TELEGRAM_ALLOWED_CHAT_ID=...
-   ```
-
-3. Install the two local launch agents after the chat ID is configured:
-
-   ```bash
-   cp scripts/com.sunilnjc.jobagent.telegram.plist ~/Library/LaunchAgents/
-   cp scripts/com.sunilnjc.jobagent.telegram-notify.plist ~/Library/LaunchAgents/
-   launchctl load ~/Library/LaunchAgents/com.sunilnjc.jobagent.telegram.plist
-   launchctl load ~/Library/LaunchAgents/com.sunilnjc.jobagent.telegram-notify.plist
-   ```
-
-The bot uses long polling, so it needs no public webhook or additional exposed port. It accepts
-commands and buttons only from `TELEGRAM_ALLOWED_CHAT_ID`. Use `/today`, `/matches`, `/autopilot`,
-and `/status` from Telegram; the daily notification runs at 07:20 after the existing morning
-preparation task.
-
-Each job card carries **📄 Send documents**, which uploads that role's `cover_letter.pdf` and
-`tailored_resume.pdf` into the chat — useful when you want to read them on the phone without the
-dashboard. The button only appears once those files have actually been drafted.
-
-`/autopilot` processes drafted roles with a score of at least 9 and explicit `worldwide` or
-`sponsors` eligibility. Set `AUTOPILOT_INCLUDE_UNKNOWN_OUTSIDE_US_UK=true` in local `.env` to
-also prepare unknown-eligibility roles outside the US/UK. Those roles still stop before
-submission if sponsorship or work authorization is unclear. The worker generates missing PDFs,
-detects the employer ATS, and stores an auditable attempt record.
-
-After changing bot code, restart the running agent so it picks the change up:
-
-```bash
-launchctl kickstart -k gui/$(id -u)/com.sunilnjc.jobagent.telegram
+```mermaid
+flowchart LR
+  A["Official employer boards"] --> B["Collect and normalize"]
+  B --> C["Validate links + deduplicate"]
+  C --> D["Eligibility and title policy"]
+  D -->|"Eligible"| E["AI fit ranking"]
+  D -->|"Not actionable"| X["Excluded with reason"]
+  E --> F["Ready shortlist"]
+  F --> G["Tailored documents + Ask AI"]
+  G --> H["Final quality review"]
+  H --> I["Candidate confirms submission"]
+  I --> J["Application ledger"]
 ```
 
-## LinkedIn / Indeed
+Pipeline states: `new` → `matched` → `drafted` → `applied` → `interviewing` / `rejected` / `offer`.
 
-These sites disallow bulk scraping in their Terms of Service. Instead of scraping search
-results, this tool supports `jobagent fetch --url <job-url>`: paste a single job posting
-URL you found manually and it will be fetched and parsed just like any other source.
+## Current model configuration
 
-## Setup
+The checked-in code supports multiple providers. Current local configuration uses:
+
+| Capability | Current model/approach |
+|---|---|
+| Semantic similarity | Ollama `nomic-embed-text` |
+| Bulk ranking | OpenAI `gpt-4o-mini` when `RANK_PROVIDER=openai`; otherwise Ollama `llama3.2` |
+| Drafting and Ask AI | OpenAI `gpt-4o` when `DRAFT_PROVIDER=openai` |
+| Local fallback drafting | Ollama `llama3.2` |
+
+The agreed quality-first routing to implement next is:
+
+| Stage | Intended model |
+|---|---|
+| Fresh, policy-eligible job assessment | GPT-5 |
+| Tailored resume, cover letter, and Ask AI | Claude Opus 4.1 |
+| Final factual/quality audit | GPT-5 |
+
+Model IDs must be validated against the account that owns the API key. Provider keys and model settings stay in the ignored local `.env`; they are never committed.
+
+## Source and eligibility policy
+
+### Source priority
+
+1. **Official employer ATS feeds** — actionable source of truth.
+2. **A user-supplied job URL** — parsed and assessed directly.
+3. **Aggregators** — discovery only; their listings may be stale, region-restricted, or incomplete.
+
+### Eligibility
+
+The user-maintained ignored configuration files determine target titles, countries, remote policy, sponsorship requirements, and pre-approved form answers:
+
+- `config/preferences.yaml`
+- `config/answers.yaml`
+
+The matcher produces labels such as `worldwide`, `sponsors`, `restricted`, `no-sponsorship`, `unknown`, and `title-filtered`. Explicit employer wording always wins: the system never overrides a clear “existing work authorisation required” or “no visa sponsorship” statement.
+
+Jobs with unknown sponsorship can be reviewed, but must not be silently submitted.
+
+## Safety boundaries
+
+The agent may prepare a supported employer form, upload approved documents, and fill pre-approved factual answers. It must stop and notify the user for:
+
+- CAPTCHA or bot challenges;
+- OTP, MFA, email/SMS verification;
+- subjective, unfamiliar, legal, or ambiguous questions;
+- missing/invalid uploads;
+- unclear work authorisation or sponsorship;
+- unsupported ATS pages.
+
+An application is only marked `applied` after an employer confirmation page is observed. The system never bypasses security controls or fabricates candidate facts.
+
+## Architecture
+
+```text
+React + TypeScript PWA
+          │ relative /api requests
+FastAPI + Python workers ───── SQLite job/application ledger
+          │                  ├── source adapters + validators
+          │                  ├── matching + drafting
+          │                  ├── ATS automation
+          │                  └── Telegram companion
+          ├── Ollama local models
+          ├── OpenAI API
+          └── Anthropic API
+
+iPhone / browser → Cloudflare Access → Cloudflare Tunnel → local FastAPI host
+```
+
+The production personal deployment runs on an always-on Mac. Cloudflare Tunnel provides an outbound-only connection to the local service, while Cloudflare Access protects the public HTTPS hostname. The backend port is not exposed through router port-forwarding.
+
+## Quick start
+
+### 1. Install dependencies
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
-
-cp .env.example .env
-# fill in ANTHROPIC_API_KEY (required for `draft`)
-# fill in ADZUNA_APP_ID / ADZUNA_APP_KEY (optional, only for the Adzuna source)
-
-# drop your resume (PDF or DOCX) into resumes/
-cp ~/path/to/resume.pdf resumes/
-
-# edit config/preferences.yaml for target titles, countries, ATS boards to watch
-```
-
-Local models used for matching (via [Ollama](https://ollama.com)):
-
-```bash
-ollama pull llama3.2
-ollama pull nomic-embed-text
-```
-
-## Usage
-
-```bash
-jobagent fetch                      # pull from all configured sources
-jobagent fetch --url <job-url>      # add a single manually-found posting (LinkedIn/Indeed)
-jobagent match [--limit N]          # score fetched jobs against your resume
-jobagent prepare [--top N]          # fetch + match + draft the top N new matches (default 3)
-jobagent review                     # list top-ranked unreviewed jobs
-jobagent gaps <job_id>              # missing requirements/keywords vs a posting, before you apply
-jobagent draft <job_id>             # generate cover letter + tailored resume bullets
-jobagent status                     # list jobs by pipeline stage
-jobagent status <job_id> <stage>    # update a job's pipeline stage
-jobagent autopilot [--limit N]      # prepare strict Ready applications and log safe stop points
-```
-
-## Daily automation (macOS)
-
-`jobagent prepare` runs the whole pipeline hands-off: it fetches new jobs, matches
-them, and drafts full application materials (cover letter + tailored resume PDF + gap
-analysis) for the top N new matches — leaving a ready-to-review queue in the "drafted"
-column. **It never submits anything; you review each and submit yourself.**
-
-To run it automatically every morning, install the launchd schedule (runs at 07:00 daily,
-and at next wake if the Mac was asleep):
-
-```bash
-cp scripts/com.sunilnjc.jobagent.prepare.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.sunilnjc.jobagent.prepare.plist
-```
-
-Output is logged to `logs/prepare.log`. Requires the Ollama app running (used for
-embeddings) — it starts at login, so being logged in is enough. To stop:
-`launchctl unload ~/Library/LaunchAgents/com.sunilnjc.jobagent.prepare.plist`.
-
-### Keep the server running
-
-For the phone to reach the board at any time, the API server has to be up — not just
-while a terminal is open. A second launchd agent starts it at login and restarts it if
-it ever crashes:
-
-```bash
-cp scripts/com.sunilnjc.jobagent.server.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.sunilnjc.jobagent.server.plist
-```
-
-Logs go to `logs/server.log` / `logs/server.err.log`. Note it starts at *login*, so
-after a reboot the Mac needs to be logged in (not just powered on) for the phone to
-connect.
-
-## Web UI
-
-A kanban board (columns = pipeline stages) for reviewing matches, triggering
-fetch/match runs, and generating drafts/gap-analyses without touching the CLI. It's a
-thin FastAPI layer over the same `jobagent` package (no logic duplication) plus a
-React + TypeScript frontend.
-
-**Backend:**
-
-```bash
 pip install -e ".[web]"
+
+cd web
+npm install
+npm run build
+cd ..
+```
+
+### 2. Configure local-only files
+
+```bash
+cp .env.example .env
+cp config/preferences.example.yaml config/preferences.yaml
+cp config/answers.example.yaml config/answers.yaml
+```
+
+Add provider keys only to `.env`. Put actual candidate preferences and answers only in the ignored `config/*.yaml` files.
+
+Place candidate resumes in `resumes/`. Generated documents are stored under `output/`.
+
+### 3. Optional local models
+
+```bash
+ollama pull nomic-embed-text
+ollama pull llama3.2
+```
+
+### 4. Run locally
+
+```bash
 uvicorn jobagent.api.main:app --host 0.0.0.0 --port 8842
 ```
 
-**Frontend:**
+Open `http://127.0.0.1:8842`.
+
+The built frontend and API share the same FastAPI origin. This is important for Cloudflare Tunnel: the frontend uses relative `/api/...` URLs and never tries to expose port `8842` publicly.
+
+## Key commands
 
 ```bash
-cd web
-npm install
-npm run dev -- --host
+jobagent fetch                      # Fetch configured sources
+jobagent fetch --url <job-url>      # Add one job URL supplied by the candidate
+jobagent match --limit N            # Apply title/eligibility/ranking flow
+jobagent review                     # View top matching roles
+jobagent draft <job_id>             # Generate tailored materials
+jobagent gaps <job_id>              # Compare a role with the candidate profile
+jobagent status                     # Inspect pipeline state
+jobagent autopilot --limit N        # Prepare strict eligible roles; never silently submits
 ```
 
-Open the printed `http://localhost:5173` URL, or the printed LAN address (e.g.
-`http://192.168.1.x:5173`) from your phone on the same WiFi. The frontend talks to the
-API at `<same-host>:8842`, computed automatically so it works from either address.
+## Web and mobile UI
 
-Port 8842 was chosen because it's uncommon — a more typical port (8420, 8000, 3000...)
-is likely to collide with some other local dev server on a shared machine, and since
-`localhost` often resolves to IPv6 first, such a collision silently routes your requests
-to the *other* server instead of failing loudly. If you change the port, update it in
-both the `uvicorn` command above and `web/src/api/client.ts`.
+The React interface includes:
 
-**Security note:** there is no authentication. This is fine on a trusted home network
-(the intended use), but do not expose this port to the public internet.
+- Today/Ready queue with search and role/location filters;
+- Applications and Excluded views;
+- role details, original posting, eligibility evidence, and status actions;
+- cover-letter and resume downloads/sharing designed for iPhone PWA use;
+- Ask AI grounded in the selected company/job and approved candidate evidence;
+- direct-apply preparation and clear exception states.
 
-## Access from your phone (Tailscale)
+For iPhone use, open the protected HTTPS hostname in Safari and choose **Share → Add to Home Screen**.
 
-To reach the board from your phone when you're *not* on the home WiFi, use
-[Tailscale](https://tailscale.com) rather than port-forwarding your router.
+## Telegram companion
 
-**Why not port-forwarding / ngrok?** The API has no authentication (see the security
-note above) — anything that can reach port 8842 can read your resume and drafted cover
-letters, and can trigger runs that spend your OpenAI/Anthropic credits. Tailscale builds
-a private WireGuard mesh between *your own* devices: the Mac and the phone get
-`100.x.y.z` addresses that only exist inside your account's network, and nothing is
-published to the public internet. Free tier covers personal use.
+Telegram is optional and private. It uses long polling and accepts actions only from `TELEGRAM_ALLOWED_CHAT_ID`.
 
-**One-time setup — Mac:**
+Useful commands include:
 
-```bash
-brew install --cask tailscale     # installs Tailscale.app (needs your sudo password)
-open -a Tailscale                 # then sign in from the menu-bar icon
+```text
+/today
+/matches
+/autopilot
+/status
+/help
 ```
 
-Sign in with whatever identity provider you prefer (Google, GitHub, …) — just remember
-which one, the phone has to match. Approve the system extension prompt if macOS asks.
+The bot can deliver generated documents, send exception notifications, and expose confirmation controls. It never sends API keys and never bypasses the final safety conditions described above.
 
-**One-time setup — iPhone:** install **Tailscale** from the App Store, open it, and sign
-in with the **same account** you used on the Mac. Both devices should now be listed in
-each other's device list.
+## Deployment on an always-on Mac
 
-**Find the Mac's Tailscale IP:**
+The application uses macOS `launchd` to keep the API, Telegram bot, and Cloudflare Tunnel running at login. Install/copy the provided launch-agent templates as appropriate for the local environment.
 
-```bash
-tailscale ip -4                   # e.g. 100.101.102.103
-```
+For the public personal hostname:
 
-(If `tailscale` isn't on your `PATH`, use the full path
-`/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4`, or just read it from the
-menu-bar icon — the Mac's own address is shown at the top of the menu.)
+1. Register a domain and manage its DNS with Cloudflare.
+2. Create a named Cloudflare Tunnel pointing the hostname at `http://127.0.0.1:8842`.
+3. Protect the hostname with a Cloudflare Access allow policy.
+4. Keep the Mac powered, logged in, and configured not to sleep while it is serving the application.
 
-**Then, on the phone:** start the backend on the Mac as usual
-(`uvicorn jobagent.api.main:app --host 0.0.0.0 --port 8842` — `0.0.0.0` matters, it's
-what makes the server listen on the Tailscale interface too) and open
+Cloudflare credentials belong under the user’s local `~/.cloudflared/` directory and must never be copied into this repository.
 
-```
-http://100.101.102.103:8842
-```
+## Repository privacy rules
 
-in Safari, substituting your own address. Port 8842 serves the built frontend as well as
-the API, so that single URL is the whole app — no separate `npm run dev` needed, though
-you do need `web/dist` to exist (`cd web && npm run build`).
+The following are intentionally ignored by Git:
 
-**Add it to the home screen:** in Safari, tap **Share** → **Add to Home Screen**. It gets
-an icon and launches full-screen without the browser chrome, like a native app.
+- `.env` and provider keys;
+- actual candidate preferences/answers;
+- resumes and generated documents;
+- SQLite database and logs;
+- Cloudflare credentials/configuration;
+- browser/Playwright sessions.
 
-**Caveat — the Mac must be awake.** Tailscale doesn't wake a sleeping machine; if the Mac
-at home is asleep, the phone gets a connection error. Either leave it awake via
-**Settings → Lock Screen** (never turn display off / prevent sleep) and **Settings →
-Battery → Options → Prevent automatic sleeping on power adapter**, or keep it up only for
-as long as you need:
+Before committing, inspect the staged diff and run a secret scan. Never commit real candidate data or infrastructure credentials.
 
-```bash
-caffeinate -s        # blocks sleep until you Ctrl-C
-```
+## Roadmap
 
-**On HTTPS:** Tailscale already encrypts the traffic at the network layer (WireGuard), but
-the browser only sees `http://` and so treats the page as an insecure origin. That means
-no service workers, and therefore no true offline PWA mode — Add to Home Screen still
-works, it just needs the Mac reachable each time. If offline caching becomes worth it
-later, `tailscale serve` can put a real, trusted HTTPS certificate in front of port 8842
-on a `<machine>.<tailnet>.ts.net` hostname.
+Near-term priorities:
+
+1. Configurable premium model router, budget limits, and per-model spend tracking.
+2. GPT-5 fit ranking for fresh, policy-eligible direct roles.
+3. Claude Opus 4.1 grounded document/Ask-AI routing.
+4. GPT-5 final factual application audit.
+5. Better paginated job-list API for large datasets and friendlier Cloudflare Access login.
+6. Additional verified ATS handlers and a stronger application exception queue.
+
+Longer term, the project can become a multi-user product with application-level authentication, a multi-tenant database, encrypted per-user credentials, model tiers, subscription/budget controls, and strict data isolation.
+
+## License
+
+See [LICENSE](LICENSE).

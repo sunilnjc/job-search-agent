@@ -15,6 +15,7 @@ dependencies = [
     "anthropic>=0.34",
     "openai>=1.30",
     "python-dotenv>=1.0",
+    "PyJWT[crypto]>=2.8,<3",
     "PyYAML>=6.0",
     "reportlab>=4.0",
     # Python 3.9-compatible browser automation runtime for the local application autopilot.
