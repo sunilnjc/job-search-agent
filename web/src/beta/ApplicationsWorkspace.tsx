@@ -1,18 +1,19 @@
 import { useMemo, useState } from "react";
-import type { BetaJob } from "./types";
+import type { BetaApplication, BetaJob } from "./types";
+import { applicationCounts } from "./workspace";
 
 export type ApplicationsWorkspaceProps = {
   jobs: BetaJob[];
+  applications: BetaApplication[];
   onOpenDetail: (job: BetaJob) => void;
   onOpenStudio: (job: BetaJob) => void;
 };
 
-type ActiveStatus = Extract<BetaJob["status"], "ready" | "applied">;
-type StatusFilter = "all" | ActiveStatus;
+type StatusFilter = "all" | "draft" | "submitted" | "interviewing" | "closed";
 
-const statusLabel: Record<ActiveStatus, string> = {
-  ready: "Ready to prepare",
-  applied: "Applied",
+const statusLabel: Record<BetaApplication["status"], string> = {
+  draft: "Preparing", ready: "Ready", submitted: "Submitted", interviewing: "Interviewing",
+  rejected: "Not selected", withdrawn: "Withdrawn", closed: "Closed",
 };
 
 const eligibilityLabel: Record<BetaJob["eligibility_status"], string> = {
@@ -27,87 +28,85 @@ function workplaceLabel(workplace: BetaJob["workplace_type"]) {
   return workplace.charAt(0).toUpperCase() + workplace.slice(1);
 }
 
-function activeStatusLabel(status: BetaJob["status"]) {
-  return status === "applied" ? statusLabel.applied : statusLabel.ready;
-}
-
 /**
- * Read-only application tracker for the private beta. It deliberately derives
- * every label from persisted job data and leaves preparation/submission work to
- * the caller-owned Application Studio.
+ * Application progress comes from applications.status, never a saved job label.
+ * Retain history even when a job falls outside the workspace's loaded page.
  */
-export function ApplicationsWorkspace({ jobs, onOpenDetail, onOpenStudio }: ApplicationsWorkspaceProps) {
+export function ApplicationsWorkspace({ jobs, applications, onOpenDetail, onOpenStudio }: ApplicationsWorkspaceProps) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const activeJobs = useMemo(() => jobs.filter((job) => job.status === "ready" || job.status === "applied"), [jobs]);
-  const readyCount = useMemo(() => activeJobs.filter((job) => job.status === "ready").length, [activeJobs]);
-  const appliedCount = useMemo(() => activeJobs.filter((job) => job.status === "applied").length, [activeJobs]);
-  const reviewCount = useMemo(() => activeJobs.filter((job) => job.eligibility_status === "needs_review").length, [activeJobs]);
-  const visibleJobs = useMemo(() => {
+  const counts = applicationCounts(applications);
+  const jobsById = useMemo(() => new Map(jobs.map((job) => [job.id, job])), [jobs]);
+  const visibleApplications = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
-    return activeJobs.filter((job) => {
-      const matchesStatus = statusFilter === "all" || job.status === statusFilter;
-      const searchable = [job.title, job.company_name, job.location_text, job.workplace_type].filter(Boolean).join(" ").toLocaleLowerCase();
+    return applications.filter((application) => {
+      const job = jobsById.get(application.job_id);
+      const matchesStatus = statusFilter === "all"
+        || (statusFilter === "draft" && ["draft", "ready"].includes(application.status))
+        || (statusFilter === "closed" && ["rejected", "withdrawn", "closed"].includes(application.status))
+        || application.status === statusFilter;
+      const searchable = [job?.title, job?.company_name, job?.location_text, statusLabel[application.status]].filter(Boolean).join(" ").toLocaleLowerCase();
       return matchesStatus && (!normalizedQuery || searchable.includes(normalizedQuery));
     });
-  }, [activeJobs, query, statusFilter]);
+  }, [applications, jobsById, query, statusFilter]);
 
   return (
     <section className="beta-applications-workspace" aria-labelledby="applications-workspace-title">
       <style>{applicationsWorkspaceStyles}</style>
       <header className="beta-applications-workspace-header">
         <div>
-          <p className="beta-applications-workspace-eyebrow">APPLICATIONS</p>
-          <h2 id="applications-workspace-title">Your active roles</h2>
-          <p>Keep each role, its eligibility, and its preparation workspace together.</p>
+          <p className="beta-applications-workspace-eyebrow">TRACKER</p>
+          <h2 id="applications-workspace-title">Every application, in one place.</h2>
+          <p>Follow your progress from preparation to interview. Statuses reflect your saved application records.</p>
         </div>
       </header>
 
       <div className="beta-applications-workspace-summary" aria-label="Application summary">
-        <article><strong>{readyCount}</strong><span>Ready to prepare</span></article>
-        <article><strong>{appliedCount}</strong><span>Applied</span></article>
-        <article><strong>{reviewCount}</strong><span>Need review</span></article>
+        <article><strong>{counts.draft}</strong><span>Preparing</span></article>
+        <article><strong>{counts.submitted}</strong><span>Submitted</span></article>
+        <article><strong>{counts.interviewing}</strong><span>Interviewing</span></article>
       </div>
 
       <div className="beta-applications-workspace-controls">
         <label className="beta-applications-workspace-search">
-          <span className="beta-applications-workspace-sr-only">Search active roles</span>
+          <span className="beta-applications-workspace-sr-only">Search applications</span>
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search roles, companies, locations" type="search" />
         </label>
         <div className="beta-applications-workspace-filters" role="group" aria-label="Filter by application status">
-          {(["all", "ready", "applied"] as StatusFilter[]).map((filter) => (
-            <button key={filter} type="button" className={statusFilter === filter ? "is-active" : ""} onClick={() => setStatusFilter(filter)}>
-              {filter === "all" ? `All ${activeJobs.length}` : `${statusLabel[filter]} ${filter === "ready" ? readyCount : appliedCount}`}
+          {(["all", "draft", "submitted", "interviewing", "closed"] as StatusFilter[]).map((filter) => (
+            <button key={filter} type="button" aria-pressed={statusFilter === filter} className={statusFilter === filter ? "is-active" : ""} onClick={() => setStatusFilter(filter)}>
+              {filter === "all" ? `All ${applications.length}` : filter === "closed" ? "Closed" : statusLabel[filter]}
             </button>
           ))}
         </div>
       </div>
 
-      {visibleJobs.length === 0 ? (
+      {visibleApplications.length === 0 ? (
         <div className="beta-applications-workspace-empty">
-          <h3>{activeJobs.length === 0 ? "No active applications yet" : "No roles match these filters"}</h3>
-          <p>{activeJobs.length === 0 ? "Roles that are ready to prepare or already applied will appear here." : "Try another search phrase or reset the status filter."}</p>
-          {activeJobs.length > 0 && <button type="button" onClick={() => { setQuery(""); setStatusFilter("all"); }}>Reset filters</button>}
+          <h3>{applications.length === 0 ? "Your next chapter starts with one role." : "No applications match these filters"}</h3>
+          <p>{applications.length === 0 ? "Open a saved role in Studio and choose Save draft record in Final review to start tracking it. Nothing is submitted automatically." : "Try another search phrase or reset the status filter."}</p>
+          {applications.length > 0 && <button type="button" onClick={() => { setQuery(""); setStatusFilter("all"); }}>Reset filters</button>}
         </div>
       ) : (
         <div className="beta-applications-workspace-list">
-          {visibleJobs.map((job) => (
-            <article className="beta-applications-workspace-row" key={job.id}>
+          {visibleApplications.map((application) => {
+            const job = jobsById.get(application.job_id);
+            return <article className="beta-applications-workspace-row" key={application.id}>
               <div className="beta-applications-workspace-role">
                 <div className="beta-applications-workspace-badges">
-                  <span className={`beta-applications-workspace-status ${job.status}`}>{activeStatusLabel(job.status)}</span>
-                  <span className={`beta-applications-workspace-eligibility ${job.eligibility_status}`}>{eligibilityLabel[job.eligibility_status]}</span>
+                  <span className={`beta-applications-workspace-status ${application.status}`}>{statusLabel[application.status]}</span>
+                  {job && <span className={`beta-applications-workspace-eligibility ${job.eligibility_status}`}>{eligibilityLabel[job.eligibility_status]}</span>}
                 </div>
-                <h3>{job.title}</h3>
-                <p>{job.company_name}</p>
-                <small>{job.location_text || "Location not listed"} · {workplaceLabel(job.workplace_type)}</small>
+                <h3>{job?.title || "Role details not loaded"}</h3>
+                <p>{job?.company_name || "Application history retained"}</p>
+                <small>{job ? `${job.location_text || "Location not listed"} · ${workplaceLabel(job.workplace_type)}` : "This role may be outside your 200 most recent saved jobs."}</small>
               </div>
               <div className="beta-applications-workspace-actions">
-                <button type="button" className="beta-applications-workspace-secondary" onClick={() => onOpenDetail(job)}>View role</button>
-                <button type="button" className="beta-applications-workspace-primary" onClick={() => onOpenStudio(job)}>{job.status === "ready" ? "Prepare" : "Open studio"}</button>
+                <button type="button" disabled={!job} className="beta-applications-workspace-secondary" onClick={() => job && onOpenDetail(job)}>View role</button>
+                <button type="button" disabled={!job} className="beta-applications-workspace-primary" onClick={() => job && onOpenStudio(job)}>Open studio</button>
               </div>
-            </article>
-          ))}
+            </article>;
+          })}
         </div>
       )}
     </section>

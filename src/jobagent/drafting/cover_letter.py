@@ -1,20 +1,31 @@
 from __future__ import annotations
 
 from pathlib import Path
+from xml.sax.saxutils import escape
 
-from jobagent.config import settings
+from jobagent.drafting.grounding import GroundingContext, GroundingError, source_for_prompt
 from jobagent.drafting.llm import complete
 from jobagent.models import Profile
 
-PROMPT = """Write a tailored, concise cover letter (under 350 words) for this candidate applying
-to this job. Be specific about how the candidate's background matches the role. Avoid generic
-filler phrases. Do not invent experience the candidate doesn't have.
+PROMPT = """Compose a concise cover letter by selecting this candidate's most relevant
+COMPLETE original-resume source facts below. Copy selected facts verbatim, preserving every
+number, negation, qualifier and attribution. You may select/reorder facts, but must not
+paraphrase, split facts or add claims. Aim for under 350 words by selecting fewer whole facts,
+not by shortening them. If evidence is insufficient, say so; no letter will be saved.
 
-If the job is on-site or country-restricted somewhere the candidate isn't authorized to work
-(see candidate constraints below), include one brief, confident sentence addressing it directly —
-e.g. that they would require visa sponsorship and are open to relocating. Do not be apologetic
-about it or dwell on it; state it as a fact alongside the value they bring. If the role is remote
-or the candidate is already authorized, omit this entirely.
+The only non-source wording allowed is this neutral structure (use as needed):
+Dear Hiring Team,
+Dear Hiring Manager,
+I am applying for the {job_title} role at {job_company}.
+Thank you for considering my application.
+Sincerely,
+Kind regards,
+
+Include candidate names, contact details or a signature only by copying a complete original
+source fact/block verbatim. Do not guess a name, address, email or phone number. Contact
+blocks may retain their line breaks. Omit unsupported details instead of placeholders.
+Include work authorization, sponsorship or relocation only when a complete original source
+fact states it explicitly. Never infer these from the job, location or remote status.
 
 Date: today is {today}. If you include a date line, use this exact date — never output a
 "[Date]" placeholder or any other bracketed placeholder.
@@ -26,13 +37,7 @@ about the role. Output nothing except the cover letter itself. Do not leave any 
 placeholders like [Date], [Company Address], or [Your Name] — omit a line entirely rather than
 leaving a placeholder.
 
-Candidate summary: {summary}
-Candidate skills: {skills}
-Candidate past titles: {titles}
-Candidate years of experience: {years}
-Candidate constraints:
-{candidate_constraints}
-Candidate resume text:
+Candidate original-resume source facts (one whole fact/block per paragraph):
 ---
 {resume_text}
 ---
@@ -44,13 +49,6 @@ Job description:
 {job_description}
 ---
 """
-
-
-def _candidate_constraints() -> str:
-    candidate = settings.load_preferences().get("candidate", {}) or {}
-    if not candidate:
-        return "(none specified)"
-    return "\n".join(f"- {key}: {value}" for key, value in candidate.items())
 
 
 def normalize_date_line(letter: str) -> str:
@@ -79,17 +77,19 @@ def draft_cover_letter(profile: Profile, job_title: str, job_company: str, job_d
 
     prompt = PROMPT.format(
         today=date.today().strftime("%d %B %Y"),
-        summary=profile.summary or "(none extracted)",
-        skills=", ".join(profile.skills) or "(none extracted)",
-        titles=", ".join(profile.titles) or "(none extracted)",
-        years=profile.years_experience or "unknown",
-        candidate_constraints=_candidate_constraints(),
-        resume_text=profile.raw_text[:6000],
+        resume_text=source_for_prompt(profile.raw_text),
         job_title=job_title,
         job_company=job_company,
         job_description=job_description[:4000],
     )
-    return normalize_date_line(complete(prompt))
+    output = complete(prompt)
+    if not isinstance(output, str):
+        raise GroundingError()
+    # Preserve deterministic date correction, then validate everything that can
+    # leave this boundary. Service/API callers cannot receive unchecked prose.
+    letter = normalize_date_line(output)
+    GroundingContext(profile.raw_text, job_title, job_company).validate_cover_letter(letter)
+    return letter
 
 
 def build_cover_letter_pdf(cover_letter_text: str, output_path: Path) -> None:
@@ -103,7 +103,9 @@ def build_cover_letter_pdf(cover_letter_text: str, output_path: Path) -> None:
     style = ParagraphStyle("body", fontName="Helvetica", fontSize=10.5, leading=15, spaceAfter=10)
 
     story = [
-        Paragraph(paragraph.replace("\n", "<br/>"), style)
+        # Source facts are literal text, never ReportLab markup or resource URLs.
+        # Add only our own line-break markup after escaping the entire paragraph.
+        Paragraph(escape(paragraph).replace("\n", "<br/>"), style)
         for paragraph in cover_letter_text.strip().split("\n\n")
         if paragraph.strip()
     ]

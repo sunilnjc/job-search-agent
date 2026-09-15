@@ -1,15 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { betaEnabled, requireSupabase } from "./supabase";
-import type { BetaJob, BetaProfile, JobPreferences } from "./types";
+import type { BetaApplication, BetaJob, BetaProfile, JobPreferences } from "./types";
 import { DocumentsPanel } from "./DocumentsPanel";
 import { ApplicationStudio } from "./ApplicationStudio";
 import { JobDetailWorkspace } from "./JobDetailWorkspace";
 import { OnboardingWizard } from "./OnboardingWizard";
 import { ApplicationsWorkspace } from "./ApplicationsWorkspace";
+import { BetaAuthLanding } from "./BetaAuthLanding";
+import { BrandIdentity } from "./BrandIdentity";
+import { TodayHome } from "./TodayHome";
+import { WorkspaceIcon } from "./WorkspaceIcon";
+import { WorkspaceDialog } from "./WorkspaceDialog";
+import { activeRoles, groupRoles, safePostingUrl, WORKSPACE_TABS } from "./workspace";
+import type { WorkspaceTab } from "./workspace";
+import { loadMobileWorkspace, mobileRequest } from "./mobile";
+import { clearDraft, draftStorage } from "./onboardingDraft";
+import { AccountPanel } from "./AccountPanel";
+import { DiscoveryPanel } from "./DiscoveryPanel";
+import { BillingPanel } from "./BillingPanel";
 import "./beta.css";
+import "./pursuit-theme.css";
 
-type View = "today" | "applications" | "profile";
+type View = WorkspaceTab | "profile";
 type AuthState = "loading" | "signed_out" | "signed_in";
 
 function humanizeEligibility(value: BetaJob["eligibility_status"]) {
@@ -17,91 +30,142 @@ function humanizeEligibility(value: BetaJob["eligibility_status"]) {
 }
 
 export default function BetaApp() {
+  return <div className="pursuit-web"><BetaSession /></div>;
+}
+
+function BetaSession() {
   const [authState, setAuthState] = useState<AuthState>("loading");
   const [session, setSession] = useState<Session | null>(null);
-  const [view, setView] = useState<View>("today");
-  const [profile, setProfile] = useState<BetaProfile | null>(null);
-  const [preferences, setPreferences] = useState<JobPreferences | null>(null);
-  const [jobs, setJobs] = useState<BetaJob[]>([]);
-  const [studioJob, setStudioJob] = useState<BetaJob | null>(null);
-  const [detailJob, setDetailJob] = useState<BetaJob | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [privacyIntent, setPrivacyIntent] = useState(false);
 
-  const loadWorkspace = async (current: Session) => {
-    const client = requireSupabase();
-    const [profileResult, preferencesResult, jobsResult] = await Promise.all([
-      client.from("profiles").select("*").eq("user_id", current.user.id).maybeSingle(),
-      client.from("job_preferences").select("*").eq("user_id", current.user.id).maybeSingle(),
-      client.from("jobs").select("*").order("updated_at", { ascending: false }).limit(50),
-    ]);
-    const firstError = profileResult.error || preferencesResult.error || jobsResult.error;
-    if (firstError) throw firstError;
-    setProfile(profileResult.data as BetaProfile | null);
-    setPreferences(preferencesResult.data as JobPreferences | null);
-    setJobs((jobsResult.data ?? []) as BetaJob[]);
-  };
+  const priorUser = useRef<string | null>(null);
 
   useEffect(() => {
     if (!betaEnabled) return;
     const client = requireSupabase();
-    client.auth.getSession().then(async ({ data, error: sessionError }) => {
-      if (sessionError) setError(sessionError.message);
-      setSession(data.session);
-      setAuthState(data.session ? "signed_in" : "signed_out");
-      if (data.session) {
-        try {
-          await loadWorkspace(data.session);
-        } catch (loadError) {
-          setError(loadError instanceof Error ? loadError.message : "Could not load your workspace.");
-        }
-      }
-    });
+    let active = true;
+    let authEventReceived = false;
     const { data: subscription } = client.auth.onAuthStateChange((_event, nextSession) => {
+      if (!active) return;
+      if (priorUser.current && priorUser.current !== nextSession?.user.id) { clearDraft(draftStorage(), priorUser.current); setPrivacyIntent(false); }
+      priorUser.current = nextSession?.user.id ?? null;
+      authEventReceived = true;
       setSession(nextSession);
       setAuthState(nextSession ? "signed_in" : "signed_out");
-      if (!nextSession) {
-        setProfile(null);
-        setPreferences(null);
-        setJobs([]);
-      }
+      setNotice(null);
+      setError(null);
     });
-    return () => subscription.subscription.unsubscribe();
+    client.auth.getSession().then(({ data, error: sessionError }) => {
+      if (!active || authEventReceived) return;
+      if (sessionError) setError("We could not restore your session. Please sign in again.");
+      priorUser.current = data.session?.user.id ?? null;
+      setSession(data.session);
+      setAuthState(data.session ? "signed_in" : "signed_out");
+    }).catch(() => {
+      if (active && !authEventReceived) { setError("We could not check your session. Please try signing in again."); setAuthState("signed_out"); }
+    });
+    return () => { active = false; subscription.subscription.unsubscribe(); };
   }, []);
-
-  const readyJobs = useMemo(() => jobs.filter((job) => job.status === "ready"), [jobs]);
-  const needsReview = useMemo(() => jobs.filter((job) => job.eligibility_status === "needs_review"), [jobs]);
 
   if (!betaEnabled) return <BetaSetupNeeded />;
   if (authState === "loading") return <main className="beta-shell beta-center"><p>Checking your secure session…</p></main>;
-  if (authState === "signed_out") return <MagicLinkSignIn onNotice={setNotice} onError={setError} notice={notice} error={error} />;
+  if (authState === "signed_out") return <BetaAuthLanding onNotice={setNotice} onError={setError} notice={notice} error={error} privacyIntent={privacyIntent} onPrivacyIntentChange={setPrivacyIntent} />;
   if (!session) return null;
+  // Unmount all private state on account change; a stale request cannot reveal
+  // the previous account's profile, jobs, documents or open sheets.
+  return <SignedInWorkspace key={session.user.id} session={session} initialPrivacy={privacyIntent} />;
+}
+
+function SignedInWorkspace({ session, initialPrivacy = false }: { session: Session; initialPrivacy?: boolean }) {
+  const [view, setView] = useState<View>("today");
+  const [privacyOpen, setPrivacyOpen] = useState(initialPrivacy);
+  const [billingOpen, setBillingOpen] = useState(false);
+  const [profile, setProfile] = useState<BetaProfile | null>(null);
+  const [preferences, setPreferences] = useState<JobPreferences | null>(null);
+  const [jobs, setJobs] = useState<BetaJob[]>([]);
+  const [applications, setApplications] = useState<BetaApplication[]>([]);
+  const [studioJob, setStudioJob] = useState<BetaJob | null>(null);
+  const [detailJob, setDetailJob] = useState<BetaJob | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const request = useRef<AbortController | null>(null);
+  const loadWorkspace = useCallback(async () => {
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    const timer = window.setTimeout(() => controller.abort(), 15000);
+    setLoading(true); setError(null);
+    try {
+      const data = await loadMobileWorkspace(session.user.id, controller.signal);
+      if (request.current !== controller) return;
+      if (controller.signal.aborted) throw new Error("Your workspace could not be loaded. Check your connection and try again.");
+      setProfile(data.profile);
+      setPreferences(data.preferences);
+      setJobs(data.jobs);
+      setApplications(data.applications);
+      setLoaded(true);
+      return true;
+    } catch (loadError) {
+      if (request.current === controller) setError(loadError instanceof Error ? loadError.message : "Could not load your workspace.");
+      return false;
+    } finally {
+      window.clearTimeout(timer);
+      if (request.current === controller) setLoading(false);
+    }
+  }, [session.user.id]);
+  useEffect(() => {
+    if (!initialPrivacy) void loadWorkspace();
+    return () => { request.current?.abort(); request.current = null; };
+  }, [loadWorkspace, initialPrivacy]);
+  const signOut = async () => {
+    try {
+      const { error: signOutError } = await requireSupabase().auth.signOut();
+      if (signOutError) throw signOutError;
+      clearDraft(draftStorage(), session.user.id);
+    } catch { setError("Could not sign out. Check your connection and try again."); }
+  };
+  const groups = useMemo(() => groupRoles(jobs), [jobs]);
+  const closeStudio = () => { setStudioJob(null); void loadWorkspace(); };
+  // Privacy is auth-only and intentionally rendered before workspace/plan/onboarding gates.
+  if (privacyOpen) return <main className="beta-shell"><AccountPanel session={session} onBack={() => { setPrivacyOpen(false); setLoaded(false); void loadWorkspace(); }} /></main>;
+  if (billingOpen) return <main className="beta-shell"><BillingPanel userId={session.user.id} onBack={() => { setBillingOpen(false); setLoaded(false); void loadWorkspace(); }} onPrivacy={() => { setBillingOpen(false); setPrivacyOpen(true); }} /></main>;
+  if (!loaded) return <main className="beta-shell beta-center" aria-busy={loading}><p className="beta-eyebrow">Your private workspace</p><h1>{loading ? "Picking up your story…" : "Let’s reconnect."}</h1><p role={error ? "alert" : "status"}>{error || "Loading your profile, saved roles and documents."}</p>{!loading && <button className="beta-primary" onClick={() => void loadWorkspace()}>Try again</button>}<button className="beta-secondary" onClick={() => setPrivacyOpen(true)}>Account privacy</button><p>Export and erasure requests do not require paid workspace access.</p><button className="beta-secondary" onClick={() => setBillingOpen(true)}>Billing test mode</button><p>Invited accounts can check test billing without active workspace membership. The service still verifies your invitation.</p><button className="beta-text-button" onClick={() => void signOut()}>Sign out</button></main>;
+  if (editing) return <div className="pursuit-edit-profile"><button className="beta-text-button" onClick={() => setEditing(false)}>← Back to profile</button><button className="beta-text-button" onClick={() => setPrivacyOpen(true)}>Account privacy</button><OnboardingWizard key={session.user.id} session={session} profile={profile} preferences={preferences} onComplete={async () => { if (!await loadWorkspace()) throw new Error("Your changes were saved, but the workspace could not refresh. Please reconnect."); setEditing(false); setNotice("Your profile and preferences were saved."); }} /></div>;
   if (!profile?.onboarding_completed_at || !preferences) {
-    return <OnboardingWizard session={session} profile={profile} preferences={preferences} onComplete={async () => {
-      await loadWorkspace(session);
+    return <div><button className="beta-text-button" onClick={() => void signOut()}>Sign out and clear this tab’s draft</button><button className="beta-text-button" onClick={() => setPrivacyOpen(true)}>Account privacy</button><OnboardingWizard session={session} profile={profile} preferences={preferences} onComplete={async () => {
+      if (!await loadWorkspace()) throw new Error("Your changes were saved, but the workspace could not refresh. Please reconnect.");
       setNotice("Your workspace is ready.");
-    }} />;
+    }} /></div>;
   }
 
   return (
     <main className="beta-shell">
+      <a className="pursuit-skip" href="#pursuit-workspace">Skip to workspace</a>
       <header className="beta-header">
-        <div><p className="beta-eyebrow">THE JOB PURSUIT · BETA</p><h1>Good to see you{profile.display_name ? `, ${profile.display_name.split(" ")[0]}` : ""}.</h1></div>
-        <button className="beta-text-button" onClick={async () => requireSupabase().auth.signOut()}>Sign out</button>
+        <a className="pursuit-wordmark" href="/beta" aria-label="The Job Pursuit home"><BrandIdentity subtitle="CAREER WORKSPACE" /></a>
+        <div className="pursuit-header-actions"><button className="beta-text-button" onClick={() => void loadWorkspace()} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button><button className="pursuit-profile-button" onClick={() => setView("profile")} aria-label="Your profile" aria-current={view === "profile" ? "page" : undefined}><WorkspaceIcon name="profile" /></button><button className="beta-text-button" onClick={() => void signOut()}>Sign out</button></div>
       </header>
       {notice && <p className="beta-notice" role="status">{notice}</p>}
       {error && <p className="beta-error" role="alert">{error}</p>}
-      {view === "today" && <Today readyJobs={readyJobs} needsReview={needsReview} allJobs={jobs} userId={session.user.id} onViewApplications={() => setView("applications")} onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} onJobsChanged={async () => {
-        try { await loadWorkspace(session); } catch (loadError) { setError(loadError instanceof Error ? loadError.message : "Could not refresh your jobs."); }
-      }} />}
-      {view === "applications" && <Applications jobs={jobs} onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} />}
-      {view === "profile" && <ProfileSummary session={session} profile={profile} preferences={preferences} />}
+      {(jobs.length === 200 || applications.length === 200) && <p className="beta-notice">Showing up to 200 recently updated records per list. Older records are not included in these counts.</p>}
+      <div id="pursuit-workspace" tabIndex={-1}>
+      {view === "today" && <TodayHome profile={profile} jobs={jobs} applications={applications} onNavigate={setView} onOpenJob={setDetailJob} />}
+      {view === "discover" && <Today readyJobs={groups.ready} needsReview={groups.review} allJobs={jobs} userId={session.user.id} preferences={preferences} onEditPreferences={() => setEditing(true)} onViewApplications={() => setView("tracker")} onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} onJobsChanged={async () => { if (!await loadWorkspace()) throw new Error("Saved roles could not refresh. The completed save was not undone."); }} />}
+      {view === "tracker" && <section className="beta-content"><ApplicationsWorkspace jobs={jobs} applications={applications} onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} /></section>}
+      {view === "studio" && <section className="beta-content"><header className="pursuit-page-heading"><p className="beta-eyebrow">Studio</p><h1>Your experience, in focus.</h1><p>A private home for your source resumes and application materials.</p></header><DocumentsPanel session={session} onChanged={async () => { await loadWorkspace(); }} /><div className="pursuit-note"><h2>Build on what’s true</h2><p>Confirm your career facts, add a full job description and open a role below to assess fit, answer questions and prepare draft documents. AI actions require your choice; you review and apply externally yourself.</p><button className="beta-text-button" onClick={() => setView("profile")}>Review your profile →</button></div><JobSection title="Choose a role to prepare" jobs={activeRoles(jobs)} empty="Save a role in Discover to open its application workspace." onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} /></section>}
+      {view === "profile" && <><ProfileSummary profile={profile} preferences={preferences} onEdit={() => setEditing(true)} onDocuments={() => setView("studio")} /><section className="beta-content"><div className="pursuit-note"><h2>Your account privacy</h2><p>Request a data export or account erasure and check its status. These controls are separate from workspace subscriptions.</p><button className="beta-secondary" onClick={() => setPrivacyOpen(true)}>Account privacy</button></div><div className="pursuit-note"><h2>Operator billing tests</h2><p>Check service-reported test billing and, when configured, open a Stripe test checkout or portal. This is not a live subscription offer.</p><button className="beta-secondary" onClick={() => setBillingOpen(true)}>Billing test mode</button></div></section></>}
+      </div>
       <nav className="beta-navigation" aria-label="Primary navigation">
-        {(["today", "applications", "profile"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}
+        {WORKSPACE_TABS.map((item) => <button key={item} className={view === item ? "active" : ""} aria-current={view === item ? "page" : undefined} onClick={() => setView(item)}><WorkspaceIcon name={item} /><span>{item[0].toUpperCase() + item.slice(1)}</span></button>)}
       </nav>
-      {studioJob && <div className="beta-studio-overlay" role="dialog" aria-modal="true" aria-label={`Application studio for ${studioJob.title}`}><div className="beta-studio-modal"><button className="beta-text-button beta-studio-close" onClick={() => setStudioJob(null)}>Close</button><ApplicationStudio session={session} job={studioJob} onApplicationStatusChange={async () => {
-        try { await loadWorkspace(session); } catch (loadError) { setError(loadError instanceof Error ? loadError.message : "Could not refresh the application."); }
-      }} /></div></div>}
+      {studioJob && <WorkspaceDialog className="beta-studio-overlay" label={`Application studio for ${studioJob.title}`} onClose={closeStudio}><div className="beta-studio-modal"><button className="beta-text-button beta-studio-close" onClick={closeStudio}>Close</button><ApplicationStudio session={session} job={studioJob} onApplicationStatusChange={async () => {
+        await loadWorkspace();
+      }} /></div></WorkspaceDialog>}
       {detailJob && <JobDetailWorkspace job={detailJob} onClose={() => setDetailJob(null)} onOpenStudio={(job) => { setDetailJob(null); setStudioJob(job); }} />}
     </main>
   );
@@ -111,54 +175,91 @@ function BetaSetupNeeded() {
   return <main className="beta-shell beta-center"><p className="beta-eyebrow">THE JOB PURSUIT · BETA</p><h1>Private beta setup is in progress.</h1><p>This environment is intentionally separate from the founder’s personal dashboard. Configure the public Supabase URL and anonymous key to enable it.</p></main>;
 }
 
-function MagicLinkSignIn({ onNotice, onError, notice, error }: { onNotice: (value: string | null) => void; onError: (value: string | null) => void; notice: string | null; error: string | null }) {
-  const [email, setEmail] = useState("");
-  const [sending, setSending] = useState(false);
-  const send = async (event: React.FormEvent) => {
-    event.preventDefault(); setSending(true); onError(null); onNotice(null);
-    // The founder dashboard intentionally lives at `/`; beta sign-in must come
-    // back to its own route after the magic-link callback.
-    const { error: signInError } = await requireSupabase().auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: new URL("/beta", window.location.origin).toString() },
-    });
-    setSending(false);
-    if (signInError) onError(signInError.message); else onNotice(`We sent a sign-in link to ${email}.`);
-  };
-  return <main className="beta-shell beta-auth"><p className="beta-eyebrow">THE JOB PURSUIT · PRIVATE BETA</p><h1>Find the right roles. Prepare stronger applications.</h1><p>Your profile and documents are private to your account.</p><form onSubmit={send}><label>Email address<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label><button className="beta-primary" disabled={sending}>{sending ? "Sending link…" : "Continue with email"}</button></form>{notice && <p className="beta-notice" role="status">{notice}</p>}{error && <p className="beta-error" role="alert">{error}</p>}</main>;
-}
-
-function Today({ readyJobs, needsReview, allJobs, userId, onViewApplications, onOpenStudio, onOpenDetail, onJobsChanged }: { readyJobs: BetaJob[]; needsReview: BetaJob[]; allJobs: BetaJob[]; userId: string; onViewApplications: () => void; onOpenStudio: (job: BetaJob) => void; onOpenDetail: (job: BetaJob) => void; onJobsChanged: () => Promise<void> }) {
+function Today({ readyJobs, needsReview, allJobs, userId, preferences, onEditPreferences, onViewApplications, onOpenStudio, onOpenDetail, onJobsChanged }: { readyJobs: BetaJob[]; needsReview: BetaJob[]; allJobs: BetaJob[]; userId: string; preferences: JobPreferences; onEditPreferences: () => void; onViewApplications: () => void; onOpenStudio: (job: BetaJob) => void; onOpenDetail: (job: BetaJob) => void; onJobsChanged: () => Promise<void> }) {
   const [adding, setAdding] = useState(false);
+  const [finding, setFinding] = useState(false);
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<"all" | "ready" | "review">("all");
   const matchesQuery = (job: BetaJob) => `${job.title} ${job.company_name} ${job.location_text ?? ""}`.toLowerCase().includes(query.trim().toLowerCase());
-  const scopedJobs = allJobs.filter((job) => matchesQuery(job) && (scope === "all" || (scope === "ready" ? job.status === "ready" : job.eligibility_status === "needs_review")));
-  const scopedReady = scopedJobs.filter((job) => job.status === "ready");
-  const scopedReview = scopedJobs.filter((job) => job.eligibility_status === "needs_review");
-  const scopedSaved = scopedJobs.filter((job) => job.status !== "ready");
-  return <section className="beta-content"><div className="beta-today-heading"><div><p className="beta-subtitle">A focused, explainable shortlist—not a feed of thousands.</p></div><button className="beta-secondary" onClick={() => setAdding((value) => !value)}>{adding ? "Close" : "Add a job"}</button></div>{adding && <AddJobForm userId={userId} onSaved={async () => { setAdding(false); await onJobsChanged(); }} /> }<div className="beta-stats"><article><strong>{readyJobs.length}</strong><span>Ready to review</span></article><article><strong>{needsReview.length}</strong><span>Need your input</span></article><article><strong>{allJobs.length}</strong><span>In your workspace</span></article></div><div className="beta-role-search"><label><span className="beta-visually-hidden">Search saved roles</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search role, company, or location" /></label><div className="beta-role-search__filters" aria-label="Role list filter"><button className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>All</button><button className={scope === "ready" ? "active" : ""} onClick={() => setScope("ready")}>Ready</button><button className={scope === "review" ? "active" : ""} onClick={() => setScope("review")}>Needs review</button></div></div>{scopedReview.length > 0 && <JobSection title="Action required" jobs={scopedReview} empty="No eligibility questions are blocking you." onOpenStudio={onOpenStudio} onOpenDetail={onOpenDetail} />}{scopedReady.length > 0 ? <JobSection title="Ready to review" jobs={scopedReady} empty="" onOpenStudio={onOpenStudio} onOpenDetail={onOpenDetail} /> : <div className="beta-empty"><h2>{query || scope !== "all" ? "No roles match this view" : "No ready roles yet"}</h2><p>{query || scope !== "all" ? "Try a different search or return to all roles." : "When a source has been validated and matches your preferences, it will appear here. This keeps the list useful rather than noisy."}</p><button className="beta-secondary" onClick={() => { if (query || scope !== "all") { setQuery(""); setScope("all"); } else { onViewApplications(); } }}>{query || scope !== "all" ? "Clear filters" : "View applications"}</button></div>}{scopedSaved.length > 0 && <JobSection title="Saved roles" jobs={scopedSaved} empty="" onOpenStudio={onOpenStudio} onOpenDetail={onOpenDetail} />}</section>;
+  const scopedJobs = activeRoles(allJobs).filter((job) => matchesQuery(job) && (scope === "all" || (scope === "ready" ? job.status === "ready" : job.eligibility_status === "needs_review")));
+  const { ready: scopedReady, review: scopedReview, saved: scopedSaved } = groupRoles(scopedJobs);
+  const nextJob = needsReview[0] ?? readyJobs[0];
+  const focusLabel = needsReview.length > 0
+    ? `${needsReview.length} role${needsReview.length === 1 ? "" : "s"} need${needsReview.length === 1 ? "s" : ""} your input`
+    : readyJobs.length > 0
+      ? `${readyJobs.length} role${readyJobs.length === 1 ? "" : "s"} ready for review`
+      : "Your shortlist is clear";
+
+  if (finding) return <section className="beta-content"><header className="pursuit-page-heading"><p className="beta-eyebrow">Discover</p><h1>Find roles on public boards.</h1><p>Review source coverage and choose which postings to save.</p></header><div className="discovery-view-toggle"><button className="beta-secondary" onClick={() => setFinding(false)}>Back to saved roles</button></div><DiscoveryPanel userId={userId} preferences={preferences} savedJobs={allJobs} onSaved={onJobsChanged} onOpenStudio={onOpenStudio} onEditPreferences={onEditPreferences} /></section>;
+
+  return (
+    <section className="beta-content">
+      <div className="beta-today-heading">
+        <div>
+          <p className="beta-eyebrow">Discover</p>
+          <h1>Your saved roles.</h1>
+          <p className="beta-subtitle">Search the configured public boards or add a posting manually. Only roles you explicitly save enter this workspace; you review and apply externally yourself.</p>
+        </div>
+        <button className="beta-secondary" onClick={() => setAdding((value) => !value)}>{adding ? "Close" : "Add a job"}</button>
+      </div>
+
+      <div className="discovery-view-toggle"><button className="beta-primary" onClick={() => setFinding(true)}>Search public boards</button></div>
+
+      <section className="beta-focus-card" aria-label="Today’s focus">
+        <div>
+          <p className="beta-focus-card__eyebrow">Today’s focus</p>
+          <h3>{focusLabel}</h3>
+          <p>{nextJob ? `Continue reviewing ${nextJob.title} at ${nextJob.company_name}.` : "Add an employer posting to start your shortlist."}</p>
+        </div>
+        {nextJob ? <button className="beta-primary" onClick={() => needsReview.length > 0 ? onOpenStudio(nextJob) : onOpenDetail(nextJob)}>{needsReview.length > 0 ? "Resolve now" : "Review role"}</button> : <button className="beta-primary" onClick={() => setAdding(true)}>Add a role</button>}
+      </section>
+
+      {adding && <AddJobForm userId={userId} onSaved={async (job) => { setAdding(false); await onJobsChanged(); onOpenStudio(job); }} />}
+
+      <div className="beta-stats" aria-label="Workspace summary">
+        <article><strong>{readyJobs.length}</strong><span>Ready to review</span></article>
+        <article><strong>{needsReview.length}</strong><span>Need your input</span></article>
+        <article><strong>{activeRoles(allJobs).length}</strong><span>Saved opportunities</span></article>
+      </div>
+
+      <div className="beta-role-search">
+        <label><span className="beta-visually-hidden">Search saved roles</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search role, company, or location" /></label>
+        <div className="beta-role-search__filters" aria-label="Role list filter">
+          <button aria-pressed={scope === "all"} className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>All</button>
+          <button aria-pressed={scope === "ready"} className={scope === "ready" ? "active" : ""} onClick={() => setScope("ready")}>Ready</button>
+          <button aria-pressed={scope === "review"} className={scope === "review" ? "active" : ""} onClick={() => setScope("review")}>Needs review</button>
+        </div>
+      </div>
+
+      {scopedReview.length > 0 && <JobSection title="Action required" jobs={scopedReview} empty="No eligibility questions are blocking you." onOpenStudio={onOpenStudio} onOpenDetail={onOpenDetail} />}
+      {scopedReady.length > 0 && <JobSection title="Ready to review" jobs={scopedReady} empty="" onOpenStudio={onOpenStudio} onOpenDetail={onOpenDetail} />}
+      {scopedJobs.length === 0 && <div className="beta-empty"><h2>{query || scope !== "all" ? "No roles match this view" : "Your next chapter starts here"}</h2><p>{query || scope !== "all" ? "Try a different search or return to all roles." : "Save an employer posting to begin. Applications you already recorded are in Tracker."}</p><button className="beta-secondary" onClick={() => { if (query || scope !== "all") { setQuery(""); setScope("all"); } else { onViewApplications(); } }}>{query || scope !== "all" ? "Clear filters" : "View tracker"}</button></div>}
+      {scopedSaved.length > 0 && <JobSection title="Saved roles" jobs={scopedSaved} empty="" onOpenStudio={onOpenStudio} onOpenDetail={onOpenDetail} />}
+    </section>
+  );
 }
 
-function AddJobForm({ userId, onSaved }: { userId: string; onSaved: () => Promise<void> }) {
+function AddJobForm({ userId, onSaved }: { userId: string; onSaved: (job: BetaJob) => Promise<void> }) {
   const [company, setCompany] = useState("");
   const [title, setTitle] = useState("");
   const [url, setUrl] = useState("");
   const [location, setLocation] = useState("");
+  const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const save = async (event: React.FormEvent) => {
     event.preventDefault(); setSaving(true); setError(null);
-    const { error: insertError } = await requireSupabase().from("jobs").insert({ user_id: userId, source: "manual", source_url: url, company_name: company, title, location_text: location || null, workplace_type: "unknown", eligibility_status: "unknown", status: "new" });
-    setSaving(false);
-    if (insertError) { setError(insertError.message); return; }
-    await onSaved();
+    try {
+      const postingUrl = safePostingUrl(url);
+      if (!postingUrl || !company.trim() || !title.trim() || !description.trim()) throw new Error("Add a company, role title, full description and valid HTTP or HTTPS posting link.");
+      const job = await mobileRequest<BetaJob>(userId, "/jobs", { method: "POST", body: { source_url: postingUrl, company_name: company.trim(), title: title.trim(), location_text: location.trim() || null, description: description.trim() } });
+      await onSaved(job);
+    } catch (saveError) { setError(saveError instanceof Error ? saveError.message : "Could not save this role."); }
+    finally { setSaving(false); }
   };
-  return <form className="beta-add-job" onSubmit={save}><h2>Add a role to your workspace</h2><p>Use a direct employer posting whenever possible. We will add validation and ranking next.</p><div className="beta-form-grid"><label>Company<input required value={company} onChange={(event) => setCompany(event.target.value)} /></label><label>Role title<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label className="wide">Original posting URL<input required type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://careers.company.com/..." /></label><label>Location <span>Optional</span><input value={location} onChange={(event) => setLocation(event.target.value)} /></label></div><button className="beta-primary" disabled={saving}>{saving ? "Saving…" : "Save role"}</button>{error && <p className="beta-error" role="alert">{error}</p>}</form>;
+  return <form className="beta-add-job" onSubmit={save}><h2>Add a role to your workspace</h2><p>Paste the actual posting text. We do not search the market or fetch the URL. An existing posting opens its saved workspace; review its description before preparing.</p><fieldset disabled={saving} className="workflow-fieldset"><div className="beta-form-grid"><label>Company<input required maxLength={160} value={company} onChange={(event) => setCompany(event.target.value)} /></label><label>Role title<input required maxLength={160} value={title} onChange={(event) => setTitle(event.target.value)} /></label><label className="wide">Original posting URL<input required type="url" maxLength={2048} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://careers.company.com/..." /></label><label>Location <span>Optional</span><input maxLength={300} value={location} onChange={(event) => setLocation(event.target.value)} /></label><label className="wide">Full job description<textarea required maxLength={80000} rows={8} value={description} onChange={event => setDescription(event.target.value)} /></label></div><button className="beta-primary">{saving ? "Saving…" : "Save role and open Studio"}</button></fieldset>{error && <p className="beta-error" role="alert">{error}</p>}</form>;
 }
 
-function Applications({ jobs, onOpenStudio, onOpenDetail }: { jobs: BetaJob[]; onOpenStudio: (job: BetaJob) => void; onOpenDetail: (job: BetaJob) => void }) { return <section className="beta-content"><ApplicationsWorkspace jobs={jobs} onOpenStudio={onOpenStudio} onOpenDetail={onOpenDetail} /></section>; }
+function ProfileSummary({ profile, preferences, onEdit, onDocuments }: { profile: BetaProfile; preferences: JobPreferences; onEdit: () => void; onDocuments: () => void }) { return <section className="beta-content"><header className="pursuit-page-heading"><p className="beta-eyebrow">Your profile</p><h1>Your story, on your terms.</h1><p>Keep your details and preferences up to date.</p></header><button className="beta-secondary" onClick={onEdit}>Edit profile and preferences</button><dl className="beta-profile"><div><dt>Name</dt><dd>{profile.display_name || "Not provided"}</dd></div><div><dt>Base location</dt><dd>{profile.base_location || "Not provided"}</dd></div><div><dt>Target roles</dt><dd>{preferences.target_titles.join(", ") || "Not provided"}</dd></div><div><dt>Regions</dt><dd>{preferences.preferred_regions.join(", ") || "Open"}</dd></div><div><dt>Sponsorship</dt><dd>{preferences.sponsorship_required ? "Required for relocation" : "Not currently required"}</dd></div></dl><div className="pursuit-note"><h2>Your career foundation</h2><p>Career text is explicitly reviewed and self-reported. Structured qualifications saved on mobile are preserved; this web editor does not change those fields.</p><p className="beta-profile-career">{profile.career_text || "No confirmed career facts yet. Edit your profile or review extracted resume facts in Studio."}</p><button className="beta-text-button" onClick={onDocuments}>Manage your source resumes →</button></div></section>; }
 
-function ProfileSummary({ session, profile, preferences }: { session: Session; profile: BetaProfile; preferences: JobPreferences }) { return <section className="beta-content"><h2>Profile</h2><dl className="beta-profile"><div><dt>Base location</dt><dd>{profile.base_location || "Not provided"}</dd></div><div><dt>Target roles</dt><dd>{preferences.target_titles.join(", ") || "Not provided"}</dd></div><div><dt>Regions</dt><dd>{preferences.preferred_regions.join(", ") || "Open"}</dd></div><div><dt>Sponsorship</dt><dd>{preferences.sponsorship_required ? "Required for relocation" : "Not currently required"}</dd></div></dl><DocumentsPanel session={session} /></section>; }
-
-function JobSection({ title, jobs, empty, onOpenStudio, onOpenDetail }: { title: string; jobs: BetaJob[]; empty: string; onOpenStudio: (job: BetaJob) => void; onOpenDetail: (job: BetaJob) => void }) { return <section className="beta-section"><h2>{title}</h2>{jobs.length === 0 ? <p className="beta-empty-inline">{empty}</p> : <div className="beta-job-list">{jobs.map((job) => <article className="beta-job" key={job.id}><div><span className={`beta-badge ${job.eligibility_status}`}>{humanizeEligibility(job.eligibility_status)}</span><h3>{job.title}</h3><p>{job.company_name} · {job.location_text || job.workplace_type || "Location not listed"}</p>{job.last_validated_at && <small>Validated {new Date(job.last_validated_at).toLocaleDateString()}</small>}</div><div className="beta-job-actions"><button className="beta-secondary" onClick={() => onOpenDetail(job)}>View role</button><button className="beta-secondary" onClick={() => onOpenStudio(job)}>Application studio</button><a href={job.source_url} target="_blank" rel="noreferrer">Original ↗</a></div></article>)}</div>}</section>; }
+function JobSection({ title, jobs, empty, onOpenStudio, onOpenDetail }: { title: string; jobs: BetaJob[]; empty: string; onOpenStudio: (job: BetaJob) => void; onOpenDetail: (job: BetaJob) => void }) { return <section className="beta-section"><h2>{title}</h2>{jobs.length === 0 ? <p className="beta-empty-inline">{empty}</p> : <div className="beta-job-list">{jobs.map((job) => <article className="beta-job" key={job.id}><div><span className={`beta-badge ${job.eligibility_status}`}>{humanizeEligibility(job.eligibility_status)}</span><h3>{job.title}</h3><p>{job.company_name} · {job.location_text || job.workplace_type || "Location not listed"}</p>{job.last_validated_at && <small>Validated {new Date(job.last_validated_at).toLocaleDateString()}</small>}</div><div className="beta-job-actions"><button className="beta-secondary" onClick={() => onOpenDetail(job)}>View role</button><button className="beta-secondary" onClick={() => onOpenStudio(job)}>Application studio</button>{safePostingUrl(job.source_url) && <a href={safePostingUrl(job.source_url)!} target="_blank" rel="noreferrer">Original ↗</a>}</div></article>)}</div>}</section>; }

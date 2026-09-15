@@ -1,4 +1,4 @@
-import type { ChatMessage, Job, JobDetail, OutreachDraft, RunStatus, Status, StatusSummary } from "../types";
+import type { ApplicationQuestion, ChatMessage, Job, JobDetail, OutreachDraft, RunStatus, Status, StatusSummary } from "../types";
 
 // The API is served by the same FastAPI origin as the UI.  A relative URL also
 // works through Cloudflare Tunnel, where port 8842 intentionally is not public.
@@ -22,24 +22,38 @@ export function coverLetterPdfUrl(id: number): string {
  * browsers retain the normal download fallback.
  */
 export async function shareOrDownloadDocument(url: string, filename: string): Promise<void> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Could not download document (${response.status})`);
-  const blob = await response.blob();
-  const file = new File([blob], filename, { type: blob.type || "application/octet-stream" });
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Could not download document (${response.status})`);
+    const blob = await response.blob();
+    const file = new File([blob], filename, { type: blob.type || "application/octet-stream" });
 
-  if (navigator.canShare?.({ files: [file] })) {
-    await navigator.share({ files: [file], title: filename });
-    return;
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+  } catch (error) {
+    // Standalone iOS web apps sometimes reject Web Share after an awaited fetch because
+    // the original button gesture has expired. Open the same-origin PDF viewer instead;
+    // its native Share menu reliably includes "Save to Files".
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    // Do not use `noopener` in the feature string here: Safari returns null for
+    // a successfully opened noopener tab, which would make us also navigate the
+    // current app away from the board. The document is same-origin; detach the
+    // opener immediately instead.
+    const opened = window.open(url, "_blank");
+    if (opened) opened.opener = null;
+    else window.location.assign(url);
   }
-
-  const objectUrl = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = objectUrl;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -85,5 +99,10 @@ export const api = {
     request<OutreachDraft>(`/api/jobs/${id}/outreach/send`, {
       method: "POST",
       body: JSON.stringify({ recipient }),
+    }),
+  listApplicationQuestions: () => request<ApplicationQuestion[]>("/api/application-questions"),
+  approveApplicationQuestion: (question: string, answer: string, jobId: number) =>
+    request<{ saved: boolean; retry_run_id: string | null }>("/api/application-questions/approve", {
+      method: "POST", body: JSON.stringify({ question, answer, job_id: jobId }),
     }),
 };

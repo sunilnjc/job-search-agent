@@ -30,6 +30,9 @@ class AutopilotTests(unittest.TestCase):
         self.direct_ats_patch = mock.patch.object(settings, "autopilot_require_direct_ats", False)
         self.direct_ats_patch.start()
         self.addCleanup(self.direct_ats_patch.stop)
+        self.auto_submit_patch = mock.patch.object(settings, "autopilot_auto_submit", False)
+        self.auto_submit_patch.start()
+        self.addCleanup(self.auto_submit_patch.stop)
         db.init_db(self.db_path)
 
     def _seed(self, *, eligibility="sponsors", score=9, url="https://boards.greenhouse.io/acme/jobs/1"):
@@ -55,21 +58,21 @@ class AutopilotTests(unittest.TestCase):
     def _preflight(_job):
         return SubmissionResult("ready_for_submission")
 
-    def test_only_explicitly_eligible_score_nine_jobs_enter_queue_by_default(self):
+    def test_high_match_jobs_enter_queue_regardless_of_eligibility_label(self):
         accepted = self._seed(eligibility="worldwide", score=9)
-        self._seed(eligibility="unknown", score=10, url="https://boards.greenhouse.io/unknown/jobs/2")
+        unknown = self._seed(eligibility="unknown", score=10, url="https://boards.greenhouse.io/unknown/jobs/2")
         self._seed(eligibility="sponsors", score=8, url="https://boards.greenhouse.io/low/jobs/3")
 
         results = process_ready_queue(db_path=self.db_path, resolver=lambda url: ATSDetection("greenhouse", url, False, False), greenhouse_preflight=self._preflight)
 
-        self.assertEqual([r.job_id for r in results], [accepted])
-        self.assertEqual(results[0].state, "ready_for_submission")
+        self.assertEqual({r.job_id for r in results}, {accepted, unknown})
+        self.assertTrue(all(result.state == "ready_for_submission" for result in results))
         with db.connection(self.db_path) as conn:
             attempt = db.get_application_attempt(conn, results[0].attempt_id)
         self.assertEqual(attempt["state"], "ready_for_submission")
         self.assertEqual(attempt["ats"], "greenhouse")
 
-    def test_opt_in_includes_unknown_roles_outside_us_uk_but_not_us_or_uk(self):
+    def test_unknown_roles_in_any_country_enter_queue(self):
         unknown = self._seed(eligibility="unknown", score=10)
         us = self._seed(eligibility="unknown", score=10, url="https://boards.greenhouse.io/us/jobs/2")
         uk = self._seed(eligibility="unknown", score=10, url="https://boards.greenhouse.io/uk/jobs/3")
@@ -83,15 +86,7 @@ class AutopilotTests(unittest.TestCase):
             resolver=lambda url: ATSDetection("greenhouse", url, False, False),
             greenhouse_preflight=self._preflight,
         )
-        self.assertEqual(results, [])
-
-        settings.autopilot_include_unknown_outside_us_uk = True
-        results = process_ready_queue(
-            db_path=self.db_path,
-            resolver=lambda url: ATSDetection("greenhouse", url, False, False),
-            greenhouse_preflight=self._preflight,
-        )
-        self.assertEqual([r.job_id for r in results], [unknown])
+        self.assertEqual({r.job_id for r in results}, {unknown, us, uk})
 
     def test_unresolved_or_aggregator_application_becomes_exception(self):
         job_id = self._seed()

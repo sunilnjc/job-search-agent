@@ -41,17 +41,20 @@ class Settings:
         self.telegram_allowed_chat_id = os.getenv("TELEGRAM_ALLOWED_CHAT_ID", "")
         self.telegram_dashboard_url = os.getenv("TELEGRAM_DASHBOARD_URL", "").rstrip("/")
         self.telegram_min_score = int(os.getenv("TELEGRAM_MIN_SCORE", "8"))
-        # Autopilot is deliberately narrower than the review feed.  An unknown eligibility
-        # classification is useful for a human to review, but never enough to start an
-        # application on its own.
+        # Eligibility signals are informative, not a submission block.  The agent must
+        # always answer work-authorisation questions truthfully when an ATS asks, but it
+        # should not discard a strong role merely because a posting omitted sponsorship
+        # wording.
         self.autopilot_min_score = int(os.getenv("AUTOPILOT_MIN_SCORE", "9"))
         self.autopilot_batch_size = int(os.getenv("AUTOPILOT_BATCH_SIZE", "5"))
-        self.autopilot_include_unknown_outside_us_uk = (
-            os.getenv("AUTOPILOT_INCLUDE_UNKNOWN_OUTSIDE_US_UK", "false").lower() == "true"
-        )
+        self.autopilot_include_unknown_outside_us_uk = True
         self.autopilot_browser_profile = ROOT / "playwright" / "profile"
         self.autopilot_headless = os.getenv("AUTOPILOT_HEADLESS", "true").lower() == "true"
         self.autopilot_require_direct_ats = os.getenv("AUTOPILOT_REQUIRE_DIRECT_ATS", "true").lower() == "true"
+        # Default to preparation; automatic submission requires explicit owner opt-in.
+        # Preserve an existing AUTOPILOT_AUTO_SUBMIT=true environment/.env override.
+        # CAPTCHA, OTP and unknown required questions remain exceptions in either mode.
+        self.autopilot_auto_submit = os.getenv("AUTOPILOT_AUTO_SUBMIT", "false").lower() == "true"
         # Optional SMTP account used only when the owner presses Send on an outreach draft.
         self.outreach_smtp_host = os.getenv("OUTREACH_SMTP_HOST", "")
         self.outreach_smtp_port = int(os.getenv("OUTREACH_SMTP_PORT", "465"))

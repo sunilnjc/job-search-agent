@@ -1,0 +1,29 @@
+.workflow { min-width: 0; overflow-wrap: anywhere; }
+.workflow-stack { display: grid; gap: 20px; }
+.workflow-card { padding: 20px; border: 1px solid var(--beta-border); border-radius: 16px; background: var(--beta-surface); min-width: 0; }
+.workflow-card h3 { margin-top: 0; }
+.workflow label { display: grid; gap: 8px; margin: 14px 0; color: var(--beta-text); }
+.workflow textarea { width: 100%; min-height: 120px; resize: vertical; }
+.workflow select { width: 100%; max-width: 100%; }
+.workflow .workflow-check, .beta-onboarding-checkbox { display: flex; align-items: flex-start; gap: 10px; }
+.workflow .workflow-check input, .beta-onboarding-checkbox input { width: 20px; height: 20px; min-height: 20px; flex: 0 0 20px; margin-top: 3px; }
+.workflow-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.workflow button { min-height: 44px; white-space: normal; }
+.pursuit-web .workflow button:not(.beta-primary):not(.beta-secondary):not(.beta-text-button) { appearance: none; padding: 10px 16px; border: 1px solid var(--beta-border); border-radius: 12px; background: var(--beta-surface); color: var(--beta-text); font: inherit; font-weight: 550; }
+.pursuit-web .workflow button:not(:disabled):hover { border-color: var(--beta-muted); }
+.pursuit-web .workflow .beta-secondary { padding: 10px 16px; border-radius: 12px; font-weight: 550; }
+.workflow button:disabled { opacity: .55; cursor: not-allowed; }
+.workflow-files { padding: 0; list-style: none; }
+.workflow-files li { display: flex; gap: 12px; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--beta-border); }
+.workflow-files li > div { min-width: 0; }
+.workflow-files small { display: block; color: var(--beta-muted); margin-top: 6px; }
+.workflow-prose { white-space: pre-wrap; }
+.workflow-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.beta-onboarding input[type=file] { max-width: 100%; }
+.beta-profile-career { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+@media (max-width: 600px) {
+  .workflow-card { padding: 14px; }
+  .workflow-files li { align-items: stretch; flex-direction: column; }
+  .workflow .beta-documents-panel__header, .workflow .beta-documents-list__item { flex-direction: column; align-items: stretch; }
+  .workflow .beta-documents-list__actions { flex-wrap: wrap; }
+}

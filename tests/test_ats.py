@@ -9,6 +9,7 @@ from jobagent.applying.ats import (
     detect_from_html,
     detect_from_url,
     is_aggregator,
+    resolve,
 )
 from jobagent.sources.ats_boards import ATSBoardsSource
 from jobagent.sources.validation import check_live_job_link
@@ -80,6 +81,11 @@ class ATSDetectionTests(unittest.TestCase):
         self.assertFalse(
             ATSDetection(ats=None, final_url="u", resolved=True, is_aggregator=True).supported
         )
+
+    def test_uses_n26_explicit_apply_route_for_greenhouse(self):
+        detected = resolve("https://n26.com/en-eu/careers/positions/7656920?gh_jid=7656920")
+        self.assertEqual(detected.ats, "greenhouse")
+        self.assertEqual(detected.final_url, "https://n26.com/en-eu/careers/positions/7656920/apply?gh_jid=7656920")
 
 
 class ApplyLinkSelectionTests(unittest.TestCase):

@@ -203,17 +203,17 @@ export function JobDetailModal({ jobId, onClose }: Props) {
           )}
           {tab === "resume_tailoring" && content[tab] && job.has_resume_pdf && (
             <button className="modal-download modal-download-primary" onClick={() => saveDocument(resumePdfUrl(job.id), docName(job.company, "Resume", "pdf"))}>
-              ⬇ Save/share resume (.pdf)
+              ⬇ Share / Save to Files (.pdf)
             </button>
           )}
           {tab === "resume_tailoring" && content[tab] && job.has_resume_docx && (
             <button className="modal-download" onClick={() => saveDocument(resumeDocxUrl(job.id), docName(job.company, "Resume", "docx"))}>
-              ⬇ Save/share resume (.docx)
+              ⬇ Share / Save to Files (.docx)
             </button>
           )}
           {tab === "cover_letter" && content[tab] && job.has_cover_letter_pdf && (
             <button className="modal-download modal-download-primary" onClick={() => saveDocument(coverLetterPdfUrl(job.id), docName(job.company, "Cover Letter", "pdf"))}>
-              ⬇ Save/share cover letter (.pdf)
+              ⬇ Share / Save to Files (.pdf)
             </button>
           )}
           {documentError && <p className="modal-document-error" role="alert">{documentError}</p>}

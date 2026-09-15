@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -86,12 +86,31 @@ def is_aggregator(url: str) -> bool:
     return bool(re.search(AGGREGATOR_PATTERN, url, re.I))
 
 
+def _n26_apply_url(url: str) -> Optional[str]:
+    """N26 job pages host the reliable Greenhouse form at ``/apply``.
+
+    Their description route can remain loading while an automation browser waits for
+    client-side navigation. The employer's explicit apply route renders the same form
+    directly, retaining the Greenhouse job ID in the query string.
+    """
+    parsed = urlparse(url)
+    if parsed.netloc.lower() not in {"n26.com", "www.n26.com"}:
+        return None
+    if not re.fullmatch(r"/en-eu/careers/positions/[^/]+", parsed.path):
+        return None
+    return urlunparse(parsed._replace(path=parsed.path + "/apply"))
+
+
 def resolve(url: str, timeout: float = 8.0, fetch_html: bool = True) -> ATSDetection:
     """Follow redirects to find the real application page and identify its ATS.
 
     Never raises: a job whose site is down or blocks us must still be reportable, so
     failures come back as an ATSDetection carrying the error.
     """
+    n26_apply = _n26_apply_url(url)
+    if n26_apply:
+        return ATSDetection(ats="greenhouse", final_url=n26_apply, resolved=True, is_aggregator=False)
+
     direct = detect_from_url(url)
     if direct:
         return ATSDetection(ats=direct, final_url=url, resolved=False, is_aggregator=False)

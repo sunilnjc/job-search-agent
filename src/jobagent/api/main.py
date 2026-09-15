@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
@@ -12,7 +13,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from jobagent.api import runs
+from jobagent.api.founder_auth import (
+    CORS_HEADERS, CORS_METHODS, FounderAuthMiddleware, FounderAuthSettings,
+)
 from jobagent.api.schemas import (
+    AnswerApprovalUpdate,
     ChatRequest,
     ChatResponse,
     ExcludeUpdate,
@@ -29,6 +34,7 @@ from jobagent.config import settings
 from jobagent.drafting.application_chat import build_system_prompt, run_application_chat
 from jobagent.drafting.cover_letter import build_cover_letter_pdf, draft_cover_letter
 from jobagent.drafting.gap_analysis import analyze_gaps
+from jobagent.drafting.grounding import GroundingContext, GroundingError, tailoring_markdown
 from jobagent.drafting.resume_builder import (
     build_tailored_resume,
     build_tailored_resume_pdf,
@@ -43,20 +49,30 @@ from jobagent.storage import db
 from jobagent.tracking import pipeline
 from jobagent.outreach import draft_outreach_email, find_public_recruiting_inbox, send_outreach_email
 from jobagent.sources.validation import check_live_job_link
+from jobagent.privacy_logging import install_privacy_logging
 
 logger = logging.getLogger(__name__)
 
 # <repo root>/web/dist — main.py lives at <repo root>/src/jobagent/api/main.py
 WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
-app = FastAPI(title="Job Search Agent API")
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    install_privacy_logging()
+    yield
+
+
+app = FastAPI(title="Job Search Agent API", lifespan=lifespan)
+founder_auth_settings = FounderAuthSettings.from_environment()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=list(founder_auth_settings.allowed_origins),
+    allow_methods=list(CORS_METHODS),
+    allow_headers=list(CORS_HEADERS),
 )
+# Added last so owner checks also wrap CORS and every future founder route.
+app.add_middleware(FounderAuthMiddleware, settings=founder_auth_settings)
 
 db.init_db()
 
@@ -206,8 +222,14 @@ def generate_draft(job_id: int):
                 raise HTTPException(409, link.reason or "Direct role unavailable")
 
         profile = get_profile()
-        cover_letter = draft_cover_letter(profile, job["title"], job["company"], job["description"])
-        resume_notes = draft_resume_tailoring(profile, job["title"], job["company"], job["description"])
+        try:
+            resume_notes = draft_resume_tailoring(profile, job["title"], job["company"], job["description"])
+            summary, highlights = parse_tailoring_notes(resume_notes)
+            GroundingContext(profile.raw_text).validate_resume(summary, highlights)
+            resume_notes = tailoring_markdown(summary, highlights)
+            cover_letter = draft_cover_letter(profile, job["title"], job["company"], job["description"])
+        except GroundingError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
         folder = slugify(f"{job['company']}-{job['title']}")
         out_dir = settings.output_dir / folder
@@ -378,8 +400,10 @@ def application_chat(job_id: int, body: ChatRequest):
         if not job:
             raise HTTPException(404, f"No job with id {job_id}")
 
+    profile = get_profile()
+    grounding = GroundingContext(profile.raw_text, job["title"], job["company"])
     system_prompt = build_system_prompt(
-        resume_text=get_profile().raw_text,
+        resume_text=profile.raw_text,
         title=job["title"],
         company=job["company"],
         location=job["location"],
@@ -391,19 +415,17 @@ def application_chat(job_id: int, body: ChatRequest):
     out_dir = settings.output_dir / slugify(f"{job['company']}-{job['title']}")
 
     def apply_cover_letter(new_text: str) -> None:
+        grounding.validate_cover_letter(new_text)
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "cover_letter.md").write_text(new_text)
         build_cover_letter_pdf(new_text, out_dir / "cover_letter.pdf")
 
     def apply_tailored_resume(summary: str, highlights: list[str]) -> bool:
         """Persist structured AI edits and only then replace the downloadable resume files."""
-        if not summary or not 4 <= len(highlights) <= 6:
-            return False
+        grounding.validate_resume(summary, highlights)
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        notes = "## Tailored Professional Summary\n\n" + summary.strip() + "\n\n## Tailored Bullet Points\n\n"
-        notes += "\n".join(f"- {highlight.strip()}" for highlight in highlights)
-        (out_dir / "resume_tailoring.md").write_text(notes + "\n")
+        (out_dir / "resume_tailoring.md").write_text(tailoring_markdown(summary, highlights))
         build_tailored_resume(summary, highlights, out_dir / "tailored_resume.docx", job_title=job["title"])
         build_tailored_resume_pdf(summary, highlights, out_dir / "tailored_resume.pdf", job_title=job["title"])
         return True
@@ -413,6 +435,7 @@ def application_chat(job_id: int, body: ChatRequest):
         [m.model_dump() for m in body.messages],
         apply_cover_letter,
         apply_tailored_resume,
+        grounding=grounding,
     )
     return ChatResponse(reply=reply, materials_updated=updated)
 
@@ -426,6 +449,32 @@ def get_answers():
     """
     approved, needs_input = answers.collect()
     return {"answers": approved, "needs_input": needs_input}
+
+
+@app.get("/api/application-questions")
+def application_questions():
+    """Questions the direct-apply worker could not answer from the approved profile."""
+    with db.connection() as conn:
+        rows = db.list_action_required_attempts(conn)
+    items = []
+    for row in rows:
+        question = str(row["reason"] or "").split(":", 1)[-1].strip()
+        items.append({
+            "attempt_id": row["id"], "job_id": row["job_id"], "title": row["title"],
+            "company": row["company"], "question": question, "final_url": row["final_url"],
+        })
+    return items
+
+
+@app.post("/api/application-questions/approve")
+def approve_application_question(body: AnswerApprovalUpdate):
+    """Save an explicit answer locally, then retry that one employer form automatically."""
+    try:
+        answers.save_custom_answer(body.question, body.answer)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    run_id = runs.start_direct_apply(body.job_id) if body.job_id is not None else None
+    return {"saved": True, "retry_run_id": run_id}
 
 
 @app.get("/api/status/summary")

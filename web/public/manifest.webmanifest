@@ -1,16 +1,15 @@
 {
-  "name": "Job Search Agent",
-  "short_name": "JobAgent",
+  "name": "The Job Pursuit",
+  "short_name": "Job Pursuit",
   "description": "Review matched jobs and application drafts, and track applications.",
-  "start_url": "/",
+  "start_url": "/beta",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#181a1e",
-  "theme_color": "#181a1e",
+  "background_color": "#F4F0E8",
+  "theme_color": "#F4F0E8",
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "/brand/unfold-192-v1.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/brand/unfold-512-v1.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
   ]
 }

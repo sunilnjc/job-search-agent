@@ -29,7 +29,7 @@ flowchart LR
   E --> F["Ready shortlist"]
   F --> G["Tailored documents + Ask AI"]
   G --> H["Final quality review"]
-  H --> I["Candidate confirms submission"]
+  H --> I["Per-attempt confirmation or explicit auto-submit opt-in"]
   I --> J["Application ledger"]
 ```
 
@@ -73,20 +73,47 @@ The user-maintained ignored configuration files determine target titles, countri
 
 The matcher produces labels such as `worldwide`, `sponsors`, `restricted`, `no-sponsorship`, `unknown`, and `title-filtered`. Explicit employer wording always wins: the system never overrides a clear “existing work authorisation required” or “no visa sponsorship” statement.
 
-Jobs with unknown sponsorship can be reviewed, but must not be silently submitted.
+Jobs with unknown sponsorship can be reviewed. The sponsorship label alone is not
+an automatic-submission guard; the configured submission mode and the employer's
+required questions determine whether the supported handler can proceed.
 
 ## Safety boundaries
 
-The agent may prepare a supported employer form, upload approved documents, and fill pre-approved factual answers. It must stop and notify the user for:
+### Explicit submission mode
+
+`AUTOPILOT_AUTO_SUBMIT` defaults to `false` when absent. In this default preparation
+mode, queue and Direct Apply preparation stop at `ready_for_submission`; they do
+not call the employer submission handler. A separate explicit per-attempt
+confirmation may invoke the supported submission handler.
+
+Setting `AUTOPILOT_AUTO_SUBMIT=true` (case-insensitive) is the owner's explicit
+opt-in to automatic final submission for supported Greenhouse forms, including
+queue and Direct Apply runs. In that mode, a run can submit without another
+per-attempt confirmation. Existing explicit environment or ignored `.env`
+overrides are preserved; changing the code default does not disable an existing
+`true` override. Other values do not enable automatic submission.
+
+Before starting a live run, the operator must verify the intended effective mode
+and restart the process after configuration changes. Preparation is not an offline
+or no-cost mode: it may still generate documents and inspect an employer page.
+Do not run either mode to test this safety boundary against a real employer.
+
+When explicitly authorized by either mode's submission path, the handler may
+upload approved documents and fill pre-approved factual answers. It must stop and
+report an exception for:
 
 - CAPTCHA or bot challenges;
 - OTP, MFA, email/SMS verification;
 - subjective, unfamiliar, legal, or ambiguous questions;
 - missing/invalid uploads;
-- unclear work authorisation or sponsorship;
+- required work-authorisation or sponsorship questions without a confirmed answer;
 - unsupported ATS pages.
 
-An application is only marked `applied` after an employer confirmation page is observed. The system never bypasses security controls or fabricates candidate facts.
+The automated submission path marks a role `applied` only when the handler reports
+an observed employer confirmation. `ready_for_submission` is preparation, not a
+submission receipt. Neither mode authorizes bypassing security controls or
+fabricating candidate facts. Independently user-recorded tracker statuses are not
+proof of an automated submission.
 
 ## Architecture
 
@@ -161,7 +188,7 @@ jobagent review                     # View top matching roles
 jobagent draft <job_id>             # Generate tailored materials
 jobagent gaps <job_id>              # Compare a role with the candidate profile
 jobagent status                     # Inspect pipeline state
-jobagent autopilot --limit N        # Prepare strict eligible roles; never silently submits
+jobagent autopilot --limit N        # Prepare by default; AUTOPILOT_AUTO_SUBMIT=true opts into submit
 ```
 
 ## Web and mobile UI

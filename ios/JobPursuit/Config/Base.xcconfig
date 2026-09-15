@@ -1,0 +1,5 @@
+// Public client settings only. AI keys and service credentials belong on the server.
+API_BASE_URL = https:/$()/www.thejobpursuit.com
+SUPABASE_URL =
+SUPABASE_PUBLISHABLE_KEY =
+#include? "Local.xcconfig"

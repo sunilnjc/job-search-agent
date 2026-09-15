@@ -15,6 +15,12 @@
   margin-bottom: 16px;
 }
 
+.app-header-actions { display: flex; align-items: flex-start; gap: 10px; }
+.action-needed-trigger { padding: 8px 12px; border: 1px solid #a970ff; border-radius: 8px; background: rgba(169,112,255,.14); color: inherit; font: inherit; cursor: pointer; }
+.approval-overlay { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.7); }
+.approval-center { width: min(680px, 100%); max-height: min(760px, 92svh); overflow: auto; padding: 24px; border: 1px solid #444; border-radius: 18px; background: #181a21; box-shadow: 0 28px 70px rgba(0,0,0,.5); }
+.approval-center header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:18px; }.approval-center h2 { margin: 5px 0; }.approval-center header p { margin: 0; opacity:.72; }.approval-eyebrow,.approval-role { color:#c695ff; font-size:12px; font-weight:700; letter-spacing:.08em; }.approval-close { border:0; background:transparent; color:inherit; font-size:30px; line-height:1; cursor:pointer; }.approval-card { margin-top:12px; padding:16px; border:1px solid #383b46; border-radius:12px; background:#20232c; }.approval-card label { display:block; margin-top:12px; font-size:13px; font-weight:600; }.approval-card input,.approval-card textarea { display:block; width:100%; margin-top:6px; box-sizing:border-box; border:1px solid #4a4e5d; border-radius:8px; padding:10px; color:inherit; background:#15171d; font:inherit; }.approval-card textarea { resize:vertical; }.approval-note { color:#aab0c0; font-size:12px; line-height:1.45; }.approval-submit { padding:10px 13px; border:0; border-radius:8px; color:#17111e; background:#ba7cff; font-weight:700; cursor:pointer; }.approval-submit:disabled { opacity:.5; cursor:not-allowed; }.approval-error { color:#ff8d97; }.approval-empty { padding:24px; border:1px dashed #4a4e5d; border-radius:12px; text-align:center; color:#c9cdd7; }
+
 .app-header h1 {
   font-size: 20px;
   margin: 0 0 8px;

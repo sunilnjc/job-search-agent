@@ -1,0 +1,7 @@
+.billing-panel { display: grid; gap: 18px; }
+.billing-panel h2 { margin-top: 0; }
+.billing-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.billing-details dt { color: var(--beta-muted); font-size: .875rem; }
+.billing-details dd { margin: 6px 0 0; overflow-wrap: anywhere; }
+.billing-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; text-decoration: none; text-align: center; }
+@media (max-width: 600px) { .billing-details { grid-template-columns: minmax(0, 1fr); } }

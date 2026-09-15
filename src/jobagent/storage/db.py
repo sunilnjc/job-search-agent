@@ -7,6 +7,7 @@ from typing import Iterator, Optional
 
 from jobagent.config import settings
 from jobagent.models import JobPosting, MatchScore, now_iso
+from jobagent.sources.urls import canonical_job_url
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -120,9 +121,30 @@ def init_db(db_path: Optional[Path] = None) -> None:
 
 def upsert_job(conn: sqlite3.Connection, job: JobPosting) -> int:
     job.fetched_at = job.fetched_at or now_iso()
-    cur = conn.execute("SELECT id FROM jobs WHERE url = ?", (job.url,))
+    cur = conn.execute("SELECT * FROM jobs WHERE url = ?", (job.url,))
     row = cur.fetchone()
+    if row is None and job.external_id and job.external_id.casefold() not in {"none", "null", "unknown"}:
+        # Do not merge by company/title or an external ID shared by different
+        # boards. Only safe tracking variants of the same source identity match.
+        variants = conn.execute("SELECT * FROM jobs WHERE source = ? AND external_id = ? ORDER BY id",
+                                (job.source, job.external_id)).fetchall()
+        row = next((item for item in variants if canonical_job_url(item["url"]) == canonical_job_url(job.url)), None)
     if row:
+        fields = {"title": job.title, "company": job.company, "location": job.location,
+                  "remote": int(job.remote), "description": job.description,
+                  "salary": job.salary, "country": job.country}
+        changed = any(row[key] != value for key, value in fields.items())
+        active = row["status"] in {"new", "matched", "drafted"}
+        conn.execute("UPDATE jobs SET " + ", ".join(key + " = ?" for key in fields) +
+                     ", posted_at = ?, fetched_at = ? WHERE id = ?",
+                     (*fields.values(), job.posted_at, job.fetched_at, row["id"]))
+        if changed and active:
+            # Invalidate derived readiness, not user exclusions or application
+            # history. Old files stay recoverable but cannot be auto-queued.
+            conn.execute("DELETE FROM match_scores WHERE job_id = ?", (row["id"],))
+            conn.execute("UPDATE jobs SET status = 'new', link_checked_at = NULL, link_available = NULL WHERE id = ?", (row["id"],))
+        if active and row["excluded_reason"] == "No longer listed on the employer's direct careers board":
+            conn.execute("UPDATE jobs SET excluded_reason = NULL WHERE id = ?", (row["id"],))
         return row["id"]
     cur = conn.execute(
         """
@@ -157,7 +179,9 @@ def list_jobs_without_score(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         """
         SELECT jobs.* FROM jobs
         LEFT JOIN match_scores ON jobs.id = match_scores.job_id
-        WHERE match_scores.job_id IS NULL
+        WHERE (match_scores.job_id IS NULL OR
+               (match_scores.llm_score IS NULL AND match_scores.llm_reasoning LIKE 'Review required:%'))
+          AND jobs.excluded_reason IS NULL AND jobs.status IN ('new', 'matched', 'drafted')
         """
     ).fetchall()
 
@@ -168,7 +192,9 @@ def list_unscored_direct_ats_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]
         """
         SELECT jobs.* FROM jobs
         LEFT JOIN match_scores ON jobs.id = match_scores.job_id
-        WHERE match_scores.job_id IS NULL
+        WHERE (match_scores.job_id IS NULL OR
+               (match_scores.llm_score IS NULL AND match_scores.llm_reasoning LIKE 'Review required:%'))
+          AND jobs.excluded_reason IS NULL AND jobs.status IN ('new', 'matched', 'drafted')
           AND (jobs.source LIKE 'greenhouse:%' OR jobs.source LIKE 'lever:%' OR jobs.source LIKE 'ashby:%')
         ORDER BY jobs.id DESC
         """
@@ -176,6 +202,8 @@ def list_unscored_direct_ats_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]
 
 
 def save_match_score(conn: sqlite3.Connection, score: MatchScore) -> None:
+    if score.llm_score is not None and (type(score.llm_score) is not int or not 1 <= score.llm_score <= 10):
+        raise ValueError("Match scores must be integers from 1 to 10")
     score.scored_at = score.scored_at or now_iso()
     conn.execute(
         """
@@ -200,6 +228,7 @@ def top_ranked_jobs(conn: sqlite3.Connection, limit: int = 10, only_status: str 
         FROM jobs
         JOIN match_scores ON jobs.id = match_scores.job_id
         WHERE jobs.status = ?
+          AND match_scores.llm_score BETWEEN 1 AND 10
         ORDER BY match_scores.llm_score DESC, match_scores.embedding_similarity DESC
         LIMIT ?
         """,
@@ -276,18 +305,11 @@ def reconcile_direct_source(conn: sqlite3.Connection, source: str, live_urls: se
     Applied/history records are retained. This is deliberately never run for aggregators,
     whose incomplete feeds are not authoritative for an employer's hiring status.
     """
-    if not live_urls:
-        rows = conn.execute(
-            "SELECT id FROM jobs WHERE source = ? AND status IN ('new', 'matched', 'drafted') AND excluded_reason IS NULL",
-            (source,),
-        ).fetchall()
-    else:
-        placeholders = ",".join("?" for _ in live_urls)
-        rows = conn.execute(
-            f"SELECT id FROM jobs WHERE source = ? AND url NOT IN ({placeholders}) "
-            "AND status IN ('new', 'matched', 'drafted') AND excluded_reason IS NULL",
-            (source, *live_urls),
-        ).fetchall()
+    current = {canonical_job_url(url) for url in live_urls}
+    rows = [row for row in conn.execute(
+        "SELECT id, url FROM jobs WHERE source = ? AND status IN ('new', 'matched', 'drafted') AND excluded_reason IS NULL",
+        (source,),
+    ).fetchall() if canonical_job_url(row["url"]) not in current]
     if rows:
         conn.executemany(
             "UPDATE jobs SET excluded_reason = ? WHERE id = ?",
@@ -345,6 +367,7 @@ def telegram_candidates(
         WHERE jobs.excluded_reason IS NULL
           AND jobs.status IN ('drafted', 'matched')
           AND match_scores.llm_score >= ?
+          AND match_scores.llm_score <= 10
           AND match_scores.eligibility NOT IN ('restricted', 'no-sponsorship')
           {unseen_clause}
         ORDER BY CASE WHEN match_scores.eligibility IN ('worldwide', 'sponsors') THEN 0 ELSE 1 END,
@@ -375,11 +398,10 @@ def autopilot_candidates(
     include_unknown_outside_us_uk: bool = False,
     require_direct_ats: bool = True,
 ) -> list[sqlite3.Row]:
-    """Return drafts that are safe enough to enter the application worker.
+    """Return high-match, direct-source drafts for application preparation.
 
-    Confirmed worldwide/sponsoring roles always qualify. Unknown roles are included only
-    when the owner explicitly opts in and the recorded country/location is not US/UK.
-    A prior live attempt is not repeated.
+    Eligibility is retained as a signal for the ATS worker and the user, rather than a
+    pre-flight rejection rule. A prior live attempt is not repeated.
     """
     return conn.execute(
         """
@@ -390,24 +412,12 @@ def autopilot_candidates(
         WHERE jobs.status = 'drafted'
           AND jobs.excluded_reason IS NULL
           AND match_scores.llm_score >= ?
+          AND match_scores.llm_score <= 10
           AND (
               ? = 0
               OR jobs.source LIKE 'greenhouse:%'
               OR jobs.source LIKE 'lever:%'
               OR jobs.source LIKE 'ashby:%'
-          )
-          AND (
-              match_scores.eligibility IN ('worldwide', 'sponsors')
-              OR (
-                  ? = 1
-                  AND match_scores.eligibility = 'unknown'
-                  AND lower(COALESCE(jobs.country, '')) NOT IN
-                      ('us', 'usa', 'united states', 'united states of america', 'uk', 'gb', 'gbr', 'united kingdom')
-                  AND lower(jobs.location) NOT LIKE '%united states%'
-                  AND lower(jobs.location) NOT LIKE '%u.s.%'
-                  AND lower(jobs.location) NOT LIKE '%united kingdom%'
-                  AND lower(jobs.location) NOT LIKE '%uk%'
-              )
           )
           AND NOT EXISTS (
               SELECT 1 FROM application_attempts attempts
@@ -420,33 +430,36 @@ def autopilot_candidates(
         -- A direct employer ATS is actionable now. Aggregator listings may still be useful
         -- for discovery, but should never starve a direct form behind them.
         ORDER BY CASE WHEN jobs.source LIKE 'greenhouse:%' OR jobs.source LIKE 'lever:%' OR jobs.source LIKE 'ashby:%' THEN 0 ELSE 1 END,
-                 CASE WHEN match_scores.eligibility IN ('worldwide', 'sponsors') THEN 0 ELSE 1 END,
                  match_scores.llm_score DESC, match_scores.embedding_similarity DESC
         LIMIT ?
         """,
-        (min_score, int(require_direct_ats), int(include_unknown_outside_us_uk), limit),
+        (min_score, int(require_direct_ats), limit),
     ).fetchall()
 
 
-def direct_apply_candidate(conn: sqlite3.Connection, job_id: int) -> Optional[sqlite3.Row]:
+def direct_apply_candidate(conn: sqlite3.Connection, job_id: int, *, allow_retry: bool = False) -> Optional[sqlite3.Row]:
     """One Ready role requested explicitly from the dashboard.
 
-    A visible Direct Apply control is not permission to bypass the same sponsorship and
-    direct-source checks used by the batch queue. It merely scopes preparation to this job.
+    A visible Direct Apply control scopes preparation to one high-match, direct-source
+    role. Eligibility is handled by the factual-answer layer on the employer form.
     """
+    retry_states = "" if allow_retry else ", 'exception', 'failed'"
     return conn.execute(
-        """
+        f"""
         SELECT jobs.*, match_scores.llm_score, match_scores.llm_reasoning,
                match_scores.embedding_similarity, match_scores.eligibility
         FROM jobs JOIN match_scores ON jobs.id = match_scores.job_id
         WHERE jobs.id = ? AND jobs.status = 'drafted' AND jobs.excluded_reason IS NULL
           AND (jobs.source LIKE 'greenhouse:%' OR jobs.source LIKE 'lever:%' OR jobs.source LIKE 'ashby:%')
           AND match_scores.llm_score >= ?
-          AND match_scores.eligibility IN ('worldwide', 'sponsors')
+          AND match_scores.llm_score <= 10
           AND NOT EXISTS (
               SELECT 1 FROM application_attempts attempts
               WHERE attempts.job_id = jobs.id
-                AND attempts.state IN ('queued', 'preparing', 'ready_for_submission', 'submitted', 'exception', 'failed')
+                AND attempts.state IN (
+                    'queued', 'preparing', 'ready_for_submission', 'submitted'
+                    {retry_states}
+                )
           )
         """,
         (job_id, settings.autopilot_min_score),
@@ -478,8 +491,6 @@ def direct_apply_block_reason(conn: sqlite3.Connection, job_id: int) -> str:
         return "not_a_direct_employer_source"
     if job["llm_score"] is None or job["llm_score"] < settings.autopilot_min_score:
         return "score_below_direct_apply_threshold"
-    if job["eligibility"] not in {"worldwide", "sponsors"}:
-        return "sponsorship_or_location_eligibility_not_confirmed"
     return "not_eligible_for_direct_apply"
 
 
@@ -540,3 +551,25 @@ def get_application_attempt_job(conn: sqlite3.Connection, attempt_id: int) -> Op
         """,
         (attempt_id,),
     ).fetchone()
+
+
+def list_action_required_attempts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Employer questions that need an explicit approval before an automatic retry."""
+    return conn.execute(
+        """
+        SELECT attempts.id, attempts.job_id, attempts.reason, attempts.final_url, attempts.updated_at,
+               jobs.title, jobs.company
+        FROM application_attempts attempts
+        JOIN jobs ON jobs.id = attempts.job_id
+        WHERE attempts.state = 'exception'
+          AND jobs.status = 'drafted'
+          AND jobs.excluded_reason IS NULL
+          AND attempts.id = (
+              SELECT latest.id FROM application_attempts latest
+              WHERE latest.job_id = attempts.job_id
+              ORDER BY latest.id DESC LIMIT 1
+          )
+          AND attempts.reason LIKE 'required_question_needs_input:%'
+        ORDER BY attempts.updated_at DESC
+        """
+    ).fetchall()

@@ -2,11 +2,20 @@
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
+!.env.*.example
 
 # SQLite database + WAL sidecar files
 *.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
 
 # Personal data — never publish
 output/
@@ -15,6 +24,7 @@ resumes/*
 MORNING_SUMMARY.md
 config/preferences.yaml
 config/answers.yaml
+docs/local-future-product-vision.md
 
 # Frontend
 node_modules/
@@ -29,3 +39,25 @@ logs/
 # Local browser authentication/profile used by the application autopilot.
 playwright/.auth/
 playwright/profile/
+playwright/.cache/
+
+# Credentials and signing material; examples must use placeholders.
+*.pem
+*.key
+*.p12
+*.p8
+*.mobileprovision
+*.provisionprofile
+
+# Native iOS local configuration, signing and build artifacts
+ios/**/Config/Local.xcconfig
+ios/**/xcuserdata/
+ios/**/DerivedData/
+ios/**/SignedDerivedData/
+ios/**/DeviceDerivedData/
+ios/**/*.xcuserstate
+ios/**/*.xcarchive
+ios/**/*.ipa
+ios/**/*.xcresult/
+ios/**/.build/
+ios/build/

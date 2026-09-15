@@ -1,255 +1,174 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { requireSupabase } from "./supabase";
-import type { BetaProfile, JobPreferences } from "./types";
+import type { BetaProfile, BetaResume, JobPreferences } from "./types";
+import { RecoveryPanel } from "./RecoveryPanel";
+import { loadMobileWorkspace, mobileRequest, uploadMobileResume } from "./mobile";
+import { MobileApiError, validateResume } from "./mobileTransport";
+import { clearDraft, draftStorage, readDraft, saveDraft } from "./onboardingDraft";
+import type { OnboardingDraft, WizardFields } from "./onboardingDraft";
 
-type OnboardingWizardProps = {
-  session: Session;
-  profile: BetaProfile | null;
-  preferences: JobPreferences | null;
-  onComplete: () => Promise<void>;
-};
-
-type Step = "basics" | "roles" | "eligibility" | "resume" | "review";
-
-type WizardState = {
-  displayName: string;
-  baseLocation: string;
-  targetTitles: string;
-  preferredLocations: string;
-  preferredRegions: string;
-  remotePreference: JobPreferences["remote_preference"];
-  sponsorshipRequired: boolean;
-  workAuthorizationNotes: string;
-  resumeFile: File | null;
-};
-
-const STEPS: Array<{ id: Step; label: string; title: string; description: string }> = [
-  { id: "basics", label: "Basics", title: "Let’s start with the essentials.", description: "These details stay private to your account." },
-  { id: "roles", label: "Target roles", title: "What work are you looking for?", description: "We use this to focus your shortlist, not to make assumptions about you." },
-  { id: "eligibility", label: "Eligibility", title: "Set the practical boundaries.", description: "Clear eligibility saves time by avoiding roles that are not realistic." },
-  { id: "resume", label: "Resume", title: "Add your approved source resume.", description: "It remains private and is never shared with an employer without your confirmation." },
-  { id: "review", label: "Review", title: "Review your private workspace.", description: "You can change these preferences any time after setup." },
-];
-
-const EMPTY_PREFERENCES: Omit<JobPreferences, "user_id"> = {
-  target_titles: [],
-  preferred_locations: [],
-  preferred_regions: [],
-  remote_preference: "open",
-  sponsorship_required: false,
-  work_authorization_notes: null,
-};
-
-const ACCEPTED_EXTENSIONS = new Set(["pdf", "doc", "docx"]);
-
-function listFrom(value: string) {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
-}
-
-function fileExtension(filename: string) {
-  return filename.split(".").pop()?.toLowerCase() ?? "";
-}
-
-function sanitizedFilename(filename: string) {
-  const extension = fileExtension(filename);
-  const stem = filename.replace(/\.[^.]+$/, "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 120) || "resume";
-  return extension ? `${stem}.${extension}` : stem;
-}
-
-function initialState(profile: BetaProfile | null, preferences: JobPreferences | null): WizardState {
+type Props = { session: Session; profile: BetaProfile | null; preferences: JobPreferences | null; onComplete: () => Promise<void> };
+const STEPS = ["Basics", "Target roles", "Eligibility", "Resume", "Review"];
+const listFrom = (value: string) => value.split(",").map(item => item.trim()).filter(Boolean);
+function initialFields(profile: BetaProfile | null, preferences: JobPreferences | null): WizardFields {
   return {
-    displayName: profile?.display_name ?? "",
-    baseLocation: profile?.base_location ?? "",
-    targetTitles: preferences?.target_titles.join(", ") ?? "",
-    preferredLocations: preferences?.preferred_locations.join(", ") ?? "",
-    preferredRegions: preferences?.preferred_regions.join(", ") ?? "",
-    remotePreference: preferences?.remote_preference ?? "open",
-    sponsorshipRequired: preferences?.sponsorship_required ?? false,
-    workAuthorizationNotes: preferences?.work_authorization_notes ?? "",
-    resumeFile: null,
+    displayName: profile?.display_name ?? "", baseLocation: profile?.base_location ?? "",
+    targetTitles: preferences?.target_titles.join(", ") ?? "", preferredLocations: preferences?.preferred_locations.join(", ") ?? "",
+    preferredRegions: preferences?.preferred_regions.join(", ") ?? "", remotePreference: preferences?.remote_preference ?? "open",
+    sponsorshipRequired: preferences?.sponsorship_required ?? false, workAuthorizationNotes: preferences?.work_authorization_notes ?? "",
+    careerText: profile?.career_text ?? "", factsConfirmed: false,
   };
 }
-
-/**
- * A save-on-finish onboarding flow. Every database and Storage operation is
- * explicitly scoped to the active Supabase user; RLS remains the enforcement
- * layer and no privileged credential is used in the browser.
- */
-export function OnboardingWizard({ session, profile, preferences, onComplete }: OnboardingWizardProps) {
-  const [stepIndex, setStepIndex] = useState(0);
-  const [form, setForm] = useState<WizardState>(() => initialState(profile, preferences));
+export function OnboardingWizard({ session, profile, preferences, onComplete }: Props) {
+  const userId = session.user.id;
+  const [draft, setDraft] = useState<OnboardingDraft>(() => readDraft(draftStorage(), userId) ?? {
+    version: 1, step: 0, fields: initialFields(profile, preferences), fileName: "", uploadedResumeId: null, uploadUncertain: false,
+  });
+  const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const step = STEPS[stepIndex];
-  const isLastStep = stepIndex === STEPS.length - 1;
-
-  const summary = useMemo(() => ({
-    roles: listFrom(form.targetTitles),
-    locations: listFrom(form.preferredLocations),
-    regions: listFrom(form.preferredRegions),
-  }), [form.preferredLocations, form.preferredRegions, form.targetTitles]);
-
-  const update = <Key extends keyof WizardState>(key: Key, value: WizardState[Key]) => {
-    setForm((current) => ({ ...current, [key]: value }));
-  };
-
-  const validateCurrentStep = () => {
-    if (step.id === "basics" && !form.displayName.trim()) return "Add the name you want to use in your workspace.";
-    if (step.id === "roles" && summary.roles.length === 0) return "Add at least one target role.";
-    if (step.id === "resume" && form.resumeFile && !ACCEPTED_EXTENSIONS.has(fileExtension(form.resumeFile.name))) return "Upload a PDF, DOC, or DOCX resume.";
+  const [saving, setSaving] = useState(false);
+  const [durable, setDurable] = useState(true);
+  const [notice, setNotice] = useState("");
+  const [availableResumes, setAvailableResumes] = useState<BetaResume[]>([]);
+  const [recoveryKey, setRecoveryKey] = useState(0);
+  const request = useRef(new AbortController());
+  const completed = useRef(false);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    request.current = new AbortController();
+    return () => { request.current.abort(); };
+  }, []);
+  useEffect(() => { if (!completed.current) setDurable(saveDraft(draftStorage(), userId, draft)); }, [draft, userId]);
+  const fields = draft.fields;
+  const summary = useMemo(() => ({ roles: listFrom(fields.targetTitles), locations: listFrom(fields.preferredLocations), regions: listFrom(fields.preferredRegions) }), [fields]);
+  const update = <K extends keyof WizardFields>(key: K, value: WizardFields[K]) => setDraft(current => ({ ...current, fields: { ...current.fields, [key]: value, ...(key === "careerText" ? { factsConfirmed: false } : {}) } }));
+  const validate = (all = false) => {
+    if ((all || draft.step === 0) && !fields.displayName.trim()) return "Add your name in Basics.";
+    if ((all || draft.step === 0) && fields.careerText.trim() && !fields.factsConfirmed) return "Review and confirm your career facts in Basics.";
+    if (all || draft.step === 1) {
+      if (!summary.roles.length) return "Add at least one target role.";
+      if ([summary.roles, summary.locations, summary.regions].some(items => items.length > 30 || items.some(item => item.length > 160))) return "Use up to 30 items per list, each up to 160 characters.";
+    }
+    if (all || draft.step === 3) {
+      if (draft.uploadUncertain) return "Check the previous upload before continuing.";
+      if (draft.fileName && !draft.uploadedResumeId && !file) return "Reselect your resume in Resume, or explicitly skip the pending upload.";
+      if (file) { try { validateResume(file); } catch (cause) { return (cause as Error).message; } }
+    }
     return null;
   };
-
-  const continueToNextStep = () => {
-    const validationError = validateCurrentStep();
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-    setError(null);
-    setStepIndex((current) => Math.min(current + 1, STEPS.length - 1));
-  };
-
   const finish = async (event: FormEvent) => {
     event.preventDefault();
-    const validationError = validateCurrentStep();
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-
-    setIsSaving(true);
-    setError(null);
-    const client = requireSupabase();
-    const userId = session.user.id;
-    let uploadedPath: string | null = null;
-
+    if (saving) return;
+    const invalid = validate(draft.step === 4);
+    if (invalid) { setError(invalid); return; }
+    if (draft.step < 4) { setError(null); setDraft(current => ({ ...current, step: current.step + 1 })); return; }
+    setSaving(true); setError(null);
+    const signal = request.current.signal;
     try {
-      const now = new Date().toISOString();
-      const [profileResult, preferencesResult] = await Promise.all([
-        client.from("profiles").upsert({
-          user_id: userId,
-          display_name: form.displayName.trim(),
-          base_location: form.baseLocation.trim() || null,
-          onboarding_completed_at: now,
-        }),
-        client.from("job_preferences").upsert({
-          user_id: userId,
-          ...EMPTY_PREFERENCES,
-          target_titles: summary.roles,
-          preferred_locations: summary.locations,
-          preferred_regions: summary.regions,
-          remote_preference: form.remotePreference,
-          sponsorship_required: form.sponsorshipRequired,
-          work_authorization_notes: form.workAuthorizationNotes.trim() || null,
-        }),
-      ]);
-      if (profileResult.error) throw profileResult.error;
-      if (preferencesResult.error) throw preferencesResult.error;
-
-      if (form.resumeFile) {
-        const storagePath = `${userId}/${crypto.randomUUID()}-${sanitizedFilename(form.resumeFile.name)}`;
-        const { error: uploadError } = await client.storage.from("resumes").upload(storagePath, form.resumeFile, {
-          contentType: form.resumeFile.type || undefined,
-          upsert: false,
-        });
-        if (uploadError) throw uploadError;
-        uploadedPath = storagePath;
-
-        const { data: existingDefault, error: existingDefaultError } = await client
-          .from("resumes")
-          .select("id")
-          .eq("user_id", userId)
-          .eq("is_default", true)
-          .maybeSingle();
-        if (existingDefaultError) throw existingDefaultError;
-
-        const { error: resumeError } = await client.from("resumes").insert({
-          user_id: userId,
-          label: "Base resume",
-          storage_path: storagePath,
-          original_filename: form.resumeFile.name,
-          mime_type: form.resumeFile.type || null,
-          byte_size: form.resumeFile.size,
-          is_default: !existingDefault,
-        });
-        if (resumeError) throw resumeError;
+      // Never save a completion marker before all requested work succeeds.
+      // Partial profile updates preserve native structured career facts.
+      await mobileRequest(userId, "/profile", { method: "PUT", signal, body: { display_name: fields.displayName.trim(), base_location: fields.baseLocation.trim() || null, career_text: fields.careerText.trim() } });
+      await mobileRequest(userId, "/preferences", { method: "PUT", signal, body: {
+        target_titles: summary.roles, preferred_locations: summary.locations, preferred_regions: summary.regions,
+        remote_preference: fields.remotePreference, sponsorship_required: fields.sponsorshipRequired,
+        work_authorization_notes: fields.workAuthorizationNotes.trim() || null, minimum_match_score: preferences?.minimum_match_score ?? 7,
+      } });
+      if (file && !draft.uploadedResumeId) {
+        // Persist the ambiguous state before sending; a reload must not silently resend.
+        const pending = { ...draft, uploadUncertain: true, uploadKey: draft.uploadKey ?? crypto.randomUUID() };
+        saveDraft(draftStorage(), userId, pending); setDraft(pending);
+        try {
+          const resume = await uploadMobileResume(userId, file, signal, pending.uploadKey);
+          const receipt = { ...pending, uploadedResumeId: resume.id, uploadUncertain: false };
+          saveDraft(draftStorage(), userId, receipt); setDraft(receipt); setFile(null);
+        } catch (cause) {
+          if (cause instanceof MobileApiError && cause.status >= 400 && cause.status < 500) {
+            const rejected = { ...pending, uploadUncertain: false }; saveDraft(draftStorage(), userId, rejected); setDraft(rejected);
+          }
+          setRecoveryKey(current => current + 1);
+          throw cause;
+        }
       }
-
+      await mobileRequest(userId, "/profile", { method: "PUT", signal, body: { onboarding_completed_at: new Date().toISOString() } });
       await onComplete();
-    } catch (saveError) {
-      if (uploadedPath) await client.storage.from("resumes").remove([uploadedPath]);
-      setError(saveError instanceof Error ? saveError.message : "We could not save your workspace. Please try again.");
-    } finally {
-      setIsSaving(false);
-    }
+      completed.current = true; clearDraft(draftStorage(), userId);
+    } catch (cause) {
+      if (!signal.aborted) setError(cause instanceof Error ? cause.message : "Your draft is retained. Check your connection and try again.");
+    } finally { if (!signal.aborted) setSaving(false); }
   };
-
-  return (
-    <main className="beta-onboarding" aria-labelledby="beta-onboarding-title">
-      <header className="beta-onboarding-header">
-        <p className="beta-eyebrow">THE JOB PURSUIT · PRIVATE BETA</p>
-        <p className="beta-onboarding-step-count">Step {stepIndex + 1} of {STEPS.length}</p>
-        <ol className="beta-onboarding-progress" aria-label="Onboarding progress">
-          {STEPS.map((item, index) => <li key={item.id} className={index === stepIndex ? "is-current" : index < stepIndex ? "is-complete" : ""} aria-current={index === stepIndex ? "step" : undefined}><span>{index + 1}</span><span>{item.label}</span></li>)}
-        </ol>
-      </header>
-
-      <form className="beta-onboarding-form" onSubmit={finish} noValidate>
-        <section className="beta-onboarding-panel" aria-live="polite">
-          <h1 id="beta-onboarding-title">{step.title}</h1>
-          <p>{step.description}</p>
-
-          {step.id === "basics" && <div className="beta-onboarding-fields">
-            <label>Name <span aria-hidden="true">*</span><input autoComplete="name" required value={form.displayName} onChange={(event) => update("displayName", event.target.value)} placeholder="Your name" /></label>
-            <label>Current city and country <span className="beta-onboarding-hint">Optional</span><input autoComplete="address-level2" value={form.baseLocation} onChange={(event) => update("baseLocation", event.target.value)} placeholder="Dubai, United Arab Emirates" /></label>
-          </div>}
-
-          {step.id === "roles" && <div className="beta-onboarding-fields">
-            <label>Target roles <span aria-hidden="true">*</span><span className="beta-onboarding-hint">Separate roles with commas</span><input required value={form.targetTitles} onChange={(event) => update("targetTitles", event.target.value)} placeholder="Forward Deployed Engineer, Senior Backend Engineer" /></label>
-            <label>Preferred countries or cities <span className="beta-onboarding-hint">Optional · comma-separated</span><input value={form.preferredLocations} onChange={(event) => update("preferredLocations", event.target.value)} placeholder="Berlin, Amsterdam, Dubai" /></label>
-            <label>Preferred regions <span className="beta-onboarding-hint">Optional · comma-separated</span><input value={form.preferredRegions} onChange={(event) => update("preferredRegions", event.target.value)} placeholder="Europe, Worldwide remote" /></label>
-          </div>}
-
-          {step.id === "eligibility" && <div className="beta-onboarding-fields">
-            <fieldset><legend>Work preference</legend><select value={form.remotePreference} onChange={(event) => update("remotePreference", event.target.value as JobPreferences["remote_preference"])}><option value="open">Open to remote, hybrid, or on-site</option><option value="remote_only">Remote only</option><option value="hybrid">Hybrid</option><option value="onsite">On-site</option></select></fieldset>
-            <label className="beta-onboarding-checkbox"><input type="checkbox" checked={form.sponsorshipRequired} onChange={(event) => update("sponsorshipRequired", event.target.checked)} /> <span>I need visa sponsorship for on-site relocation.</span></label>
-            <label>Work authorisation notes <span className="beta-onboarding-hint">Optional</span><textarea value={form.workAuthorizationNotes} onChange={(event) => update("workAuthorizationNotes", event.target.value)} placeholder="For example: based in the UAE; open to relocation with employer sponsorship." rows={4} /></label>
-          </div>}
-
-          {step.id === "resume" && <div className="beta-onboarding-fields">
-            <input ref={fileInput} className="beta-onboarding-file-input" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => update("resumeFile", event.target.files?.[0] ?? null)} />
-            <button type="button" className="beta-onboarding-upload" onClick={() => fileInput.current?.click()}>Choose a private resume</button>
-            <p className="beta-onboarding-file-status">{form.resumeFile ? `${form.resumeFile.name} selected` : "PDF, DOC, or DOCX. You can also upload it later from your profile."}</p>
-            <p className="beta-onboarding-privacy-note">Your resume is stored in your private account folder. The app uses it only to prepare documents you review.</p>
-          </div>}
-
-          {step.id === "review" && <dl className="beta-onboarding-review">
-            <div><dt>Name</dt><dd>{form.displayName}</dd></div>
-            <div><dt>Location</dt><dd>{form.baseLocation || "Not provided"}</dd></div>
-            <div><dt>Target roles</dt><dd>{summary.roles.join(", ")}</dd></div>
-            <div><dt>Preferred places</dt><dd>{[...summary.locations, ...summary.regions].join(", ") || "Open"}</dd></div>
-            <div><dt>Work preference</dt><dd>{form.remotePreference.replace(/_/g, " ")}</dd></div>
-            <div><dt>Sponsorship</dt><dd>{form.sponsorshipRequired ? "Required for relocation" : "Not currently required"}</dd></div>
-            <div><dt>Base resume</dt><dd>{form.resumeFile?.name || "Not uploaded yet"}</dd></div>
-          </dl>}
-        </section>
-
-        {error && <p className="beta-onboarding-error" role="alert">{error}</p>}
-        <footer className="beta-onboarding-actions">
-          <button type="button" className="beta-onboarding-back" onClick={() => { setError(null); setStepIndex((current) => Math.max(0, current - 1)); }} disabled={stepIndex === 0 || isSaving}>Back</button>
-          {isLastStep ? <button type="submit" className="beta-onboarding-finish" disabled={isSaving}>{isSaving ? "Creating your workspace…" : "Create my private workspace"}</button> : <button type="button" className="beta-onboarding-continue" onClick={continueToNextStep}>Continue</button>}
-        </footer>
-      </form>
-    </main>
-  );
+  const checkUpload = async () => {
+    setSaving(true); setError(null);
+    try {
+      const workspace = await loadMobileWorkspace(userId, request.current.signal);
+      const candidates = workspace.resumes.filter(resume => resume.original_filename === draft.fileName);
+      setAvailableResumes(candidates);
+      if (candidates.length) {
+        setNotice("Saved resumes with this filename were found. A filename alone does not prove it is this upload. Choose a saved resume below, or check recovery; no upload was retried.");
+      } else {
+        setNotice("No saved resume with this filename was found in the returned list. Reselect it or skip; uploading again is your choice.");
+        setDraft(current => ({ ...current, uploadUncertain: false }));
+      }
+    } catch (cause) { setError((cause as Error).message); } finally { setSaving(false); }
+  };
+  return <main className="beta-onboarding" aria-labelledby="beta-onboarding-title">
+    <header className="beta-onboarding-header"><p className="beta-eyebrow">THE JOB PURSUIT · PRIVATE BETA</p><p>Step {draft.step + 1} of 5</p>
+      <ol className="beta-onboarding-progress" aria-label="Onboarding progress">{STEPS.map((label, index) => <li key={label} className={index === draft.step ? "is-current" : index < draft.step ? "is-complete" : ""} aria-current={index === draft.step ? "step" : undefined}><span>{index + 1}</span><span>{label}</span></li>)}</ol>
+    </header>
+    <p className="beta-onboarding-hint">{durable ? "Your text draft stays in this browser tab until completion or sign-out. File contents are not saved in the draft." : "Browser draft storage is unavailable. Keep this tab open to retain your work."}</p>
+    <form className="beta-onboarding-form" onSubmit={finish}>
+      <fieldset disabled={saving} className="workflow-fieldset">
+      <section className="beta-onboarding-panel">
+        <h1 id="beta-onboarding-title">{STEPS[draft.step]}</h1>
+        {draft.step === 0 && <div className="beta-onboarding-fields">
+          <label>Name<input autoComplete="name" required maxLength={160} value={fields.displayName} onChange={event => update("displayName", event.target.value)} /></label>
+          <label>Current city and country<input maxLength={240} value={fields.baseLocation} onChange={event => update("baseLocation", event.target.value)} /></label>
+          <label>Confirmed career facts <span>Optional now; needed for grounded preparation</span><textarea maxLength={100000} rows={8} value={fields.careerText} onChange={event => update("careerText", event.target.value)} placeholder="Your actual roles, dates, responsibilities, education and achievements. Do not add qualifications you do not hold." /></label>
+          <label className="beta-onboarding-checkbox"><input type="checkbox" checked={fields.factsConfirmed} onChange={event => update("factsConfirmed", event.target.checked)} /><span>I reviewed these facts and confirm they accurately describe my career. These are self-reported, not independently verified.</span></label>
+          <p>Structured qualifications saved on mobile are preserved. This editor changes only career text.</p>
+        </div>}
+        {draft.step === 1 && <div className="beta-onboarding-fields">
+          <p>These preferences guide configured public-board discovery and role assessment. Coverage is limited to the operator’s selected boards, not the whole market. Manual posting links are not automatically fetched.</p>
+          <label>Target roles <span>Comma-separated</span><input required value={fields.targetTitles} onChange={event => update("targetTitles", event.target.value)} /></label>
+          <label>Preferred countries or cities<input value={fields.preferredLocations} onChange={event => update("preferredLocations", event.target.value)} /></label>
+          <label>Preferred regions<input value={fields.preferredRegions} onChange={event => update("preferredRegions", event.target.value)} /></label>
+        </div>}
+        {draft.step === 2 && <div className="beta-onboarding-fields">
+          <p>These preferences do not confirm work rights for any job. Review eligibility separately in each role’s Studio.</p>
+          <label>Work preference<select value={fields.remotePreference} onChange={event => update("remotePreference", event.target.value as WizardFields["remotePreference"])}><option value="open">Open to remote, hybrid, or on-site</option><option value="remote_only">Remote only</option><option value="hybrid">Hybrid</option><option value="onsite">On-site</option></select></label>
+          <label className="beta-onboarding-checkbox"><input type="checkbox" checked={fields.sponsorshipRequired} onChange={event => update("sponsorshipRequired", event.target.checked)} /><span>I need visa sponsorship for relocation.</span></label>
+          <label>Work authorisation notes<textarea maxLength={4000} value={fields.workAuthorizationNotes} onChange={event => update("workAuthorizationNotes", event.target.value)} /></label>
+        </div>}
+        {draft.step === 3 && <div className="beta-onboarding-fields">
+          <p>Optional PDF or DOCX, up to 8 MiB. The server validates the file before saving it. No AI starts on upload.</p>
+          <input aria-label="Onboarding resume" ref={input} type="file" accept=".pdf,.docx" onChange={event => {
+            const selected = event.target.files?.[0]; if (!selected) return;
+            try { validateResume(selected); setError(null); setFile(selected); setDraft(current => ({ ...current, fileName: selected.name, uploadedResumeId: null, uploadUncertain: false, uploadKey: current.fileName === selected.name ? current.uploadKey ?? crypto.randomUUID() : crypto.randomUUID() })); }
+            catch (cause) { setError((cause as Error).message); event.target.value = ""; }
+          }} disabled={draft.uploadUncertain} />
+          <p>{draft.uploadedResumeId ? "Resume saved: " + draft.fileName : draft.fileName ? draft.fileName + (file ? " selected" : " — reselect the file to upload") : "No new resume selected. Existing resumes are kept."}</p>
+          {draft.uploadUncertain && <button type="button" onClick={() => void checkUpload()}>Check previous upload</button>}
+          <button type="button" onClick={() => { setFile(null); if (input.current) input.current.value = ""; setDraft(current => ({ ...current, fileName: "", uploadedResumeId: null, uploadUncertain: false, uploadKey: undefined })); setError(null); }}>Skip pending upload (keep any saved resume)</button>
+        </div>}
+        {draft.step === 4 && <div>
+          <dl className="beta-onboarding-review"><div><dt>Name</dt><dd>{fields.displayName}</dd></div><div><dt>Target roles</dt><dd>{summary.roles.join(", ")}</dd></div><div><dt>Resume</dt><dd>{draft.uploadedResumeId ? "Already saved: " + draft.fileName : draft.fileName || "Skipped for now"}</dd></div><div><dt>Career facts</dt><dd>{fields.careerText.trim() ? "Reviewed self-reported text" : "Not added yet"}</dd></div></dl>
+          <p>Saving creates a private, manual-role preparation workspace. Nothing is sent to an employer.</p>
+          {draft.uploadUncertain && <button type="button" onClick={() => void checkUpload()}>Check previous upload</button>}
+        </div>}
+      </section>
+      <footer className="beta-onboarding-actions">
+        <button type="button" className="beta-onboarding-back" disabled={draft.step === 0} onClick={() => { setError(null); setDraft(current => ({ ...current, step: current.step - 1 })); }}>Back</button>
+        <button type="submit" className="beta-onboarding-finish">{saving ? "Saving…" : draft.step < 4 ? "Continue" : profile?.onboarding_completed_at ? "Save changes" : "Create my private workspace"}</button>
+      </footer>
+      </fieldset>
+      {error && <p className="beta-onboarding-error" role="alert">{error}</p>}
+      {notice && <p role="status">{notice}</p>}
+    </form>
+    {(draft.step === 3 || draft.step === 4) && <div className="workflow-stack workflow">
+      {availableResumes.map(resume => <button disabled={saving} key={resume.id} onClick={() => { setDraft(current => ({ ...current, uploadedResumeId: resume.id, fileName: resume.original_filename, uploadUncertain: false })); setFile(null); setAvailableResumes([]); setError(null); }}>Use saved resume: {resume.original_filename} ({resume.id})</button>)}
+      <RecoveryPanel userId={userId} kind="resume" refreshKey={recoveryKey} onRecovered={async result => {
+        if (!("deleted" in result)) { setDraft(current => ({ ...current, uploadedResumeId: result.id, fileName: result.original_filename, uploadUncertain: false })); setFile(null); setError(null); }
+      }} />
+    </div>}
+  </main>;
 }

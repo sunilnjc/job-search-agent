@@ -1,9 +1,8 @@
-"""Safe, auditable preparation worker for Ready job applications.
+"""Auditable direct-application worker for Ready job applications.
 
-The worker intentionally stops at ``ready_for_submission``.  A browser ATS handler may fill
-only approved facts, but a real application is marked submitted only after its confirmation
-page is observed.  CAPTCHA, OTP, unfamiliar questions, missing documents and eligibility
-ambiguity all become explicit exceptions for Telegram to report.
+For supported forms, the owner has authorized automatic final submission using only approved,
+truthful profile facts. A job is marked Applied only after the employer confirmation page is
+observed. CAPTCHA, OTP, unfamiliar required questions and upload failures remain exceptions.
 """
 from __future__ import annotations
 
@@ -46,8 +45,9 @@ def process_job(
     resolver: Callable[[str], ats.ATSDetection] = ats.resolve_for_application,
     profile: Any = None,
     greenhouse_preflight: Optional[Callable[[Mapping[str, object]], Any]] = None,
+    greenhouse_submit: Optional[Callable[[Mapping[str, object], Path, Path], Any]] = None,
 ) -> AutopilotResult:
-    """Prepare a single strict-eligibility job, preserving every outcome in SQLite."""
+    """Prepare a single high-match job, preserving every outcome in SQLite."""
     attempt_id = db.create_application_attempt(conn, int(job["id"]))
     db.update_application_attempt(conn, attempt_id, state="preparing")
     cover_letter, resume = document_paths(job)
@@ -91,12 +91,28 @@ def process_job(
                 )
                 return _result(job, "exception", reason=preflight_result.reason, attempt_id=attempt_id, final_url=detected.final_url)
 
-        # A platform-specific browser handler will continue from this recorded checkpoint.
-        # Never treat a prepared packet as a submitted application.
         db.update_application_attempt(
             conn, attempt_id, state="ready_for_submission", ats=detected.ats,
             final_url=detected.final_url, details_json=metadata,
         )
+        if settings.autopilot_auto_submit and detected.ats == "greenhouse":
+            if greenhouse_submit is None:
+                from jobagent.applying.greenhouse import submit as greenhouse_submit
+
+            outcome = greenhouse_submit(
+                {"final_url": detected.final_url, "title": job["title"], "company": job["company"]},
+                resume,
+                cover_letter,
+            )
+            db.update_application_attempt(
+                conn, attempt_id, state=outcome.state, reason=outcome.reason,
+                submitted=outcome.state == "submitted",
+            )
+            if outcome.state == "submitted":
+                from jobagent.tracking import pipeline
+
+                pipeline.transition(conn, int(job["id"]), "applied")
+            return _result(job, outcome.state, reason=outcome.reason, attempt_id=attempt_id, final_url=detected.final_url)
         return _result(job, "ready_for_submission", attempt_id=attempt_id, final_url=detected.final_url)
     except Exception as exc:  # record failure; a single job must not stop the rest of the queue
         reason = f"preparation_error:{type(exc).__name__}"
@@ -112,7 +128,7 @@ def process_ready_queue(
     profile: Any = None,
     greenhouse_preflight: Optional[Callable[[Mapping[str, object]], Any]] = None,
 ) -> list[AutopilotResult]:
-    """Process a bounded batch of explicitly eligible drafted roles.
+    """Process a bounded batch of high-match drafted roles.
 
     The query, attempt creation, and each job's state change use the same local database;
     callers can safely run this repeatedly without duplicating a prepared application.
@@ -148,7 +164,9 @@ def process_direct_apply_job(
     """Prepare one Direct Apply request from a Ready card."""
     db.init_db(db_path)
     with db.connection(db_path) as conn:
-        job = db.direct_apply_candidate(conn, job_id)
+        # Direct Apply is an explicit user action, so a previously failed technical attempt
+        # can be retried while queue automation still avoids duplicate retries.
+        job = db.direct_apply_candidate(conn, job_id, allow_retry=True)
         if not job:
             existing = db.get_job(conn, job_id)
             if not existing:

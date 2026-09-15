@@ -86,3 +86,9 @@ class OutreachDraftOut(BaseModel):
 
 class OutreachRecipientUpdate(BaseModel):
     recipient: str
+
+
+class AnswerApprovalUpdate(BaseModel):
+    question: str
+    answer: str
+    job_id: Optional[int] = None

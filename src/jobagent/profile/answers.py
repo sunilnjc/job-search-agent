@@ -42,6 +42,7 @@ class Answer:
 # Question patterns → dotted path in answers.yaml. Ordered: the first match wins, so put
 # the more specific patterns first (expected salary before generic salary, etc.).
 QUESTION_PATTERNS: list[tuple[str, str, str]] = [
+    (r"are you a us person|u\.s\. person", "application.us_person", "US person"),
     (r"criminal|convict|felony|offen[cs]e", "application.criminal_history", "Criminal history"),
     (r"legal claim|lawsuit|litigation|legal action", "application.legal_claims", "Legal claims"),
     (r"acknowledg|confirm.*(privacy|policy|notice)|consent", "application.legal_acknowledgement", "Acknowledgement"),
@@ -81,6 +82,35 @@ def load_answers() -> dict:
         return yaml.safe_load(handle) or {}
 
 
+def normalize_question(question: str) -> str:
+    """Stable key for a live ATS question, without storing an employer's markup."""
+    return re.sub(r"\s+", " ", question.replace("*", " ").strip().lower())
+
+
+def save_custom_answer(question: str, value: str) -> None:
+    """Persist an explicit user approval in the gitignored local answer library."""
+    question = question.strip()
+    value = value.strip()
+    if not question or not value:
+        raise ValueError("A question and answer are both required")
+    data = load_answers()
+    custom = data.setdefault("custom_answers", {})
+    if not isinstance(custom, dict):
+        custom = data["custom_answers"] = {}
+    custom[normalize_question(question)] = value
+    with open(settings.answers_path, "w") as handle:
+        yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=True)
+
+
+def custom_answer_for(question: str, data: Optional[dict] = None) -> Optional[str]:
+    data = load_answers() if data is None else data
+    custom = data.get("custom_answers", {}) if isinstance(data, dict) else {}
+    if not isinstance(custom, dict):
+        return None
+    value = custom.get(normalize_question(question))
+    return str(value).strip() if not _is_missing(value) else None
+
+
 def _lookup(data: dict, dotted: str) -> Any:
     node: Any = data
     for part in dotted.split("."):
@@ -107,6 +137,9 @@ def answer_for(question: str, data: Optional[dict] = None) -> Optional[Answer]:
     Deliberately conservative: a near-miss must not be answered with a neighbouring fact.
     """
     data = load_answers() if data is None else data
+    custom = custom_answer_for(question, data=data)
+    if custom is not None:
+        return Answer(field="custom_answers." + normalize_question(question), value=custom, label=question)
     text = question.lower()
     for pattern, dotted, label in QUESTION_PATTERNS:
         if re.search(pattern, text):
@@ -123,6 +156,155 @@ def answer_for(question: str, data: Optional[dict] = None) -> Optional[Answer]:
                 if not policy_answer.needs_input:
                     answer = policy_answer
             return Answer(field=answer.field, value=answer.value, label=label)
+    return None
+
+
+def country_key(value: str) -> str:
+    """Literal country-name aliases, not an inference of work authorization."""
+    key = re.sub(r"[^a-z]", "", value.casefold())
+    return {
+        "us": "us", "usa": "us", "unitedstates": "us", "unitedstatesofamerica": "us",
+        "uk": "gb", "gb": "gb", "greatbritain": "gb", "unitedkingdom": "gb",
+        "uae": "ae", "ae": "ae", "unitedarabemirates": "ae",
+        "canada": "ca", "ca": "ca", "india": "in", "in": "in",
+        "germany": "de", "de": "de", "ireland": "ie", "ie": "ie",
+    }.get(key, key)
+
+
+_COUNTRY_SCOPE = re.compile(r"\b(?:work(?:ing)? in|authorized in|authorised in|(?:work (?:authorization|permit)|sponsorship) (?:in|for))\s+(?:the\s+)?(.+)", re.I)
+
+
+def _question_country(question: str) -> Optional[str]:
+    found = _COUNTRY_SCOPE.search(question)
+    if not found:
+        return None
+    if "," in found.group(1) and not re.search(r",\s*(?:now|currently|at present)\b", found.group(1), re.I):
+        return None
+    value = re.split(r"[?,;]|\b(?:without|with)\b", found.group(1), maxsplit=1, flags=re.I)[0].strip()
+    if re.search(r"\b(?:and|or|except|outside|this|that|our|your|any|future|currently)\b", value, re.I):
+        return None
+    return country_key(value) if value and len(value.split()) <= 5 else None
+
+
+def _boolean(value: Any) -> Optional[bool]:
+    if type(value) is bool:
+        return value
+    if isinstance(value, str):
+        return {"yes": True, "true": True, "no": False, "false": False}.get(value.strip().casefold())
+    return None
+
+
+def _country_authorization(data: dict, country: Optional[str]) -> Optional[bool]:
+    if not country:
+        return None
+    signals = []
+    mapping = _lookup(data, "work_authorization.authorization_by_country") or {}
+    if isinstance(mapping, dict):
+        signals.extend(_boolean(value) for key, value in mapping.items() if isinstance(key, str) and country_key(key) == country)
+    for field, value in (("authorized_countries", True), ("unauthorized_countries", False)):
+        countries = _lookup(data, "work_authorization." + field)
+        if isinstance(countries, list) and any(isinstance(item, str) and country_key(item) == country for item in countries):
+            signals.append(value)
+    known = {value for value in signals if value is not None}
+    # An absent country is unknown, not unauthorized; conflicting facts need review.
+    return next(iter(known)) if len(known) == 1 else None
+
+
+def _employment_choice(question: str, data: dict) -> Optional[bool]:
+    text = question.casefold()
+    if re.search(r"\b(?:if|unless|assuming|depending)\b", text):
+        return None
+    sponsor = bool(re.search(r"\bsponsor(?:ship)?\b", text))
+    authorization = bool(re.search(r"authori[sz]ed|right to work|work permit", text))
+    country = _question_country(text)
+    if _COUNTRY_SCOPE.search(text) and country is None:
+        return None  # An ambiguous country scope must not fall back to a global fact.
+    rights = _country_authorization(data, country)
+    needs = _boolean(_lookup(data, "work_authorization.needs_sponsorship"))
+    scoped_needs = _lookup(data, "work_authorization.sponsorship_by_country") or {}
+    if country and isinstance(scoped_needs, dict):
+        scoped = [_boolean(value) for key, value in scoped_needs.items() if isinstance(key, str) and country_key(key) == country]
+        if scoped:
+            needs = scoped[0] if len(set(scoped)) == 1 else None
+    if sponsor:
+        negative = bool(re.search(r"\bwithout (?:the need for )?(?:visa )?sponsorship\b|\bnot (?:need|require|required)\b|\bno (?:visa )?sponsorship\b", text))
+        if "without" in text and not negative:
+            return None
+        if authorization:
+            # Compound work-rights + sponsorship questions must be unambiguous.
+            if not negative:
+                return None
+            if rights is False or needs is True:
+                return False
+            return True if rights is True and needs is False else None
+        if not re.search(r"\b(?:need|require|required|requiring|without)\b", text):
+            return None
+        return (not needs if negative else needs) if needs is not None else None
+    if authorization:
+        inverse = bool(re.search(r"\bunauthori[sz]ed\b|\bnot (?:legally )?authori[sz]ed\b", text))
+        if re.search(r"\bnot unauthori[sz]ed\b", text):
+            return None
+        if not inverse and re.search(r"\b(?:not|no|never|lack|without|don't|do not)\b", text):
+            return None
+        return (not rights if inverse else rights) if rights is not None else None
+    return None
+
+
+def choice_for_question(question: str, options: list[str], data: Optional[dict] = None) -> Optional[str]:
+    """Return an approved concrete option for a select/radio question.
+
+    Forms commonly phrase a question as a select with ``Yes``/``No`` options. The
+    factual answer library deliberately stores richer explanatory text for text boxes,
+    so this resolver translates only unambiguous cases to an option actually present on
+    the form. It returns ``None`` rather than guessing when no safe mapping exists.
+    """
+    data = load_answers() if data is None else data
+    custom = custom_answer_for(question, data=data)
+    cleaned = [(option, re.sub(r"\s+", " ", option).strip().lower()) for option in options]
+    if custom:
+        normalized_custom = re.sub(r"\s+", " ", custom).strip().lower()
+        for original, normalized in cleaned:
+            if normalized == normalized_custom:
+                return original
+        return None  # Never replace an exact approved answer with a generic guess.
+
+    answer = answer_for(question, data=data)
+    if answer is None:
+        return None
+
+    text = question.lower()
+    target: Optional[str] = None
+
+    employment = answer.field in {"work_authorization.summary", "application.work_authorization"}
+    if employment:
+        value = _employment_choice(question, data)
+        target = "yes" if value is True else "no" if value is False else None
+    elif answer.needs_input:
+        return None
+    elif answer.field.startswith("voluntary_disclosures."):
+        target = answer.value.casefold()
+    else:
+        value = _boolean(answer.value)
+        if answer.field == "application.legal_acknowledgement" and answer.value.casefold() == "yes, i acknowledge.":
+            value = True
+        # Nonstandard/negated boolean questions require an exact approved answer.
+        if re.search(r"\b(?:not|no|never|lack|without|unless|don't)\b", text):
+            return None
+        target = "yes" if value is True else "no" if value is False else None
+
+    if target:
+        for original, normalized in cleaned:
+            if normalized == target:
+                return original
+
+    if employment or answer.needs_input:
+        return None
+
+    # If the approved answer is itself an exact option (e.g. Male), use it.
+    approved = answer.value.strip().lower()
+    for original, normalized in cleaned:
+        if normalized == approved:
+            return original
     return None
 
 

@@ -39,6 +39,26 @@ def display_name(board: str) -> str:
     return BOARD_DISPLAY_NAMES.get(board.lower(), board.replace("-", " ").title())
 
 
+def lever_description(job: dict) -> str:
+    """Keep section labels and complete requirements, including list-only gates."""
+    sections = []
+    intro = job.get("descriptionPlain") or job.get("description")
+    if isinstance(intro, str) and intro.strip():
+        sections.append(clean_html(intro))
+    lists = job.get("lists") or []
+    for section in lists if isinstance(lists, list) else []:
+        if not isinstance(section, dict):
+            continue
+        for key in ("text", "content"):
+            value = section.get(key)
+            if isinstance(value, str) and value.strip():
+                sections.append(clean_html(value))
+    additional = job.get("additionalPlain") or job.get("additional")
+    if isinstance(additional, str) and additional.strip():
+        sections.append(clean_html(additional))
+    return "\n".join(sections)
+
+
 class ATSBoardsSource(JobSource):
     name = "ats_boards"
 
@@ -146,7 +166,7 @@ class ATSBoardsSource(JobSource):
                     location=location,
                     remote="remote" in location.lower(),
                     url=job.get("hostedUrl", ""),
-                    description=job.get("descriptionPlain", "") or job.get("description", ""),
+                    description=lever_description(job),
                     posted_at=str(job.get("createdAt", "")),
                 )
             )

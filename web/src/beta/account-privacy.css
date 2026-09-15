@@ -1,0 +1,16 @@
+.account-privacy { max-width: 900px; margin: 0 auto; }
+.account-privacy > .workflow-stack { margin-top: 24px; }
+.account-privacy input:not([type=checkbox]) { width: 100%; }
+.account-privacy .account-request-list { list-style: none; padding: 0; margin: 0; }
+.account-request { padding: 24px 0; border-bottom: 1px solid var(--beta-border); }
+.account-request:last-child { border-bottom: 0; padding-bottom: 0; }
+.account-request-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.account-request-heading h3 { margin: 0; }
+.account-state { border: 1px solid var(--beta-border); border-radius: 100px; padding: 4px 12px; font-size: .875rem; text-transform: capitalize; }
+.account-request dl { display: grid; gap: 10px; }
+.account-request dl div { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; }
+.account-request dt { color: var(--beta-muted); }
+.account-request dd { margin: 0; overflow-wrap: anywhere; font-size: .9rem; }
+.account-server-message { white-space: pre-wrap; }
+.account-erasure { border-left: 3px solid var(--pursuit-error); }
+@media (max-width: 600px) { .account-request dl div { grid-template-columns: 1fr; gap: 2px; } }

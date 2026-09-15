@@ -30,7 +30,7 @@ HELP_TEXT = (
     "<b>📝 Prepare application</b> writes the cover letter and tailored resume for a role, "
     "then sends them here; <b>📄 Send documents</b> re-sends them once they exist. "
     "<b>Review packet</b> opens the private phone dashboard.\n\n"
-    "<b>Confirm submit</b> is shown only after the application packet has been prepared. "
+    "Supported forms are submitted automatically after documents and factual answers are prepared. "
     "It is the final per-application confirmation; CAPTCHA, unclear facts, and eligibility "
     "questions always stop for your review."
 )
@@ -220,18 +220,14 @@ class TelegramBot:
         self.send_text(chat_id, "<b>Pipeline status</b>\n\n" + "\n".join(lines))
 
     def run_autopilot(self, chat_id: str | int) -> int:
-        """Prepare the strict Ready queue and describe every safe stopping point."""
+        """Prepare the high-match Ready queue and describe every safe stopping point."""
         from jobagent.applying.autopilot import process_ready_queue
 
         results = process_ready_queue()
         if not results:
-            eligibility_note = (
-                "including unknown roles outside the US/UK" if settings.autopilot_include_unknown_outside_us_uk
-                else "with explicit worldwide or sponsorship eligibility"
-            )
             self.send_text(
                 chat_id,
-                f"No drafted roles currently meet the autopilot rule: score 9+ and {eligibility_note}.",
+                "No drafted roles currently meet the autopilot rule: score 9+ and a direct employer source.",
             )
             return 0
         self.send_autopilot_results(chat_id, results)
@@ -244,8 +240,9 @@ class TelegramBot:
         for result in results:
             role = html.escape(_short(f"{result.title} — {result.company}", 120))
             if result.state == "ready_for_submission":
-                lines.append(f"• {role}: packet ready; choose Confirm submit to send it.")
-                buttons.append([{"text": f"Confirm submit: {_short(result.company, 28)}", "callback_data": f"submit:{result.attempt_id}"}])
+                lines.append(f"• {role}: packet prepared; automatic submission is pending.")
+            elif result.state == "submitted":
+                lines.append(f"• {role}: submitted successfully.")
             else:
                 reason = html.escape((result.reason or "needs review").replace("_", " "))
                 lines.append(f"• {role}: <b>action required</b> ({reason}).")

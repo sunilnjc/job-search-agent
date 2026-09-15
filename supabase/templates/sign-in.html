@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign in to The Job Pursuit</title>
+  </head>
+  <body style="margin:0;padding:24px 16px;background:#F4F0E8;color:#233238;font-family:Arial,Helvetica,sans-serif;line-height:1.6;">
+    <table role="presentation" style="width:100%;max-width:560px;margin:0 auto;border-collapse:collapse;background:#ffffff;">
+      <tr><td style="padding:32px;">
+        <p style="margin:0 0 24px;color:#233238;font-family:Georgia,'Times New Roman',serif;font-size:24px;font-weight:bold;letter-spacing:-0.5px;">the job pursuit</p>
+        <h1 style="margin:0 0 16px;font-size:26px;line-height:1.3;">Your sign-in code</h1>
+        <p>Enter this one-time code in the app where you requested it:</p>
+        <p style="padding:16px;background:#f0f2f3;color:#202429;font-family:monospace;font-size:32px;font-weight:bold;letter-spacing:6px;text-align:center;">{{ .Token }}</p>
+        <p>Using the website? You can use this link instead:</p>
+        <p style="margin:24px 0;"><a href="{{ .ConfirmationURL }}" style="display:inline-block;padding:12px 24px;background:#202429;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:bold;">Sign in to The Job Pursuit</a></p>
+        <p style="color:#555d66;font-size:14px;">Use either the code or the link once. If it has expired, request a new sign-in email from the app.</p>
+        <p style="color:#555d66;font-size:14px;">Never share your code or forward this email. If you did not request it, you can ignore it.</p>
+      </td></tr>
+    </table>
+  </body>
+</html>

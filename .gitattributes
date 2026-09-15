@@ -1,0 +1,4 @@
+# Generated document fixtures must not be normalized or treated as text diffs.
+*.pdf binary
+*.docx binary
+*.png binary

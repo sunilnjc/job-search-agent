@@ -68,3 +68,12 @@ export interface OutreachDraft {
   body: string;
   status: string;
 }
+
+export interface ApplicationQuestion {
+  attempt_id: number;
+  job_id: number;
+  title: string;
+  company: string;
+  question: string;
+  final_url: string | null;
+}

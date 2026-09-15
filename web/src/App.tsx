@@ -11,6 +11,7 @@ import { ExcludedList } from "./components/ExcludedList";
 import { ActionBar } from "./components/ActionBar";
 import { FilterBar } from "./components/FilterBar";
 import { JobDetailModal } from "./components/JobDetailModal";
+import { ActionNeededCenter } from "./components/ActionNeededCenter";
 import BetaApp from "./beta/BetaApp";
 import { betaMode } from "./beta/supabase";
 import { applyFilters } from "./filters";
@@ -28,9 +29,26 @@ const VIEW_LABELS: Record<View, string> = {
 function App() {
   if (betaMode) return <BetaApp />;
 
+  // The public entry point is the multi-user beta. The original personal
+  // dashboard deliberately lives at /admin so Cloudflare Access can protect
+  // that route without placing its own sign-in page in front of /beta.
+  if (window.location.pathname === "/") {
+    window.location.replace("/beta");
+    return null;
+  }
+
+  if (!window.location.pathname.startsWith("/admin")) {
+    return <NotFound />;
+  }
+
+  return <FounderDashboard />;
+}
+
+function FounderDashboard() {
   const { data: jobs, isLoading, error } = useJobs();
   const [openJobId, setOpenJobId] = useState<number | null>(null);
   const [view, setView] = useState<View>("board");
+  const [showApprovals, setShowApprovals] = useState(false);
   const [filters, setFilters] = useState<JobFilters>({ roles: new Set(), regions: new Set(), query: "" });
   const isMobile = useIsMobile();
 
@@ -69,7 +87,7 @@ function App() {
             ))}
           </nav>
         </div>
-        {!isMobile && <ActionBar />}
+        <div className="app-header-actions"><button className="action-needed-trigger" onClick={() => setShowApprovals(true)}>Action needed</button>{!isMobile && <ActionBar />}</div>
       </header>
 
       {jobs && !isMobile && <FilterBar jobs={jobs} filters={filters} onChange={setFilters} />}
@@ -95,9 +113,19 @@ function App() {
       {openJobId !== null && (
         <JobDetailModal jobId={openJobId} onClose={closeJob} />
       )}
+      {showApprovals && <ActionNeededCenter onClose={() => setShowApprovals(false)} />}
 
       {isMobile && <MobileNavigation view={view} onChange={setView} />}
     </div>
+  );
+}
+
+function NotFound() {
+  return (
+    <main className="app-loading">
+      <p>This page does not exist.</p>
+      <a href="/beta">Go to The Job Pursuit beta</a>
+    </main>
   );
 }
 

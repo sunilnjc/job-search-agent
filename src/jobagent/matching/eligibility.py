@@ -5,7 +5,7 @@ import re
 # Deterministic screen for work-eligibility signals in a posting, run before any
 # LLM scoring. Tags:
 #   worldwide  - explicitly remote from anywhere
-#   sponsors   - mentions visa sponsorship / relocation support
+#   sponsors   - explicitly offers sponsorship (relocation alone is not a visa offer)
 #   restricted - requires local work authorization / in-country presence
 #   unknown    - no clear signal (common: many source APIs truncate descriptions)
 
@@ -13,7 +13,6 @@ SPONSORS_PATTERNS = [
     r"visa sponsorship (?:is )?(?:available|offered|provided)",
     r"we (?:can |will )?sponsor",
     r"sponsorship (?:is )?available",
-    r"relocation (?:support|assistance|package)",
 ]
 
 WORLDWIDE_PATTERNS = [
@@ -25,15 +24,22 @@ WORLDWIDE_PATTERNS = [
     r"anywhere in the world",
 ]
 
-RESTRICTED_PATTERNS = [
+NO_SPONSORSHIP_PATTERNS = [
+    r"\b(?:no|without) (?:visa )?sponsorship\b",
+    r"\bsponsorship (?:is |will be )?(?:not available|unavailable|not offered|not provided|not supported|not possible)\b",
+    r"\b(?:no|do not|don't|does not|doesn't|not able to|unable to|cannot|can't|will not|won't) (?:provide |offer )?(?:visa )?sponsor",
+    r"without (?:the need for )?(?:visa )?sponsorship",
+]
+
+RESTRICTED_PATTERNS = NO_SPONSORSHIP_PATTERNS + [
     r"(?:must be|are you) (?:legally )?(?:authori[sz]ed|eligible) to work in",
     r"work authori[sz]ation (?:in|for) the (?:us|u\.s\.|united states|uk|eu)",
-    r"(?:no|not able to|unable to|cannot|can't|will not|won't) (?:provide |offer )?sponsor",
-    r"without (?:the need for )?(?:visa )?sponsorship",
     r"us citizens?(?:hip)? (?:only|required)",
     r"green card",
     r"security clearance",
-    r"must (?:be (?:based|located)|reside) in (?:the )?(?:us|u\.s\.|united states|uk|eu|europe|canada)",
+    r"must (?:be (?:based|located)|reside) in\b",
+    r"\bremote (?:within|in)\b",
+    r"\bremote \(?[a-z][a-z .-]{0,60}\s+only\b",
     r"remote \(?(?:us|u\.s\.|usa|united states|uk|eu)(?: only)?\)?",
     r"(?:us|u\.s\.|uk|eu)[- ]based (?:candidates? |applicants? )?only",
     r"right to work in the (?:us|uk|eu)",
@@ -41,17 +47,23 @@ RESTRICTED_PATTERNS = [
 ]
 
 
+def prohibits_sponsorship(text: str) -> bool:
+    return any(re.search(pattern, text, re.I) for pattern in NO_SPONSORSHIP_PATTERNS)
+
+
 def classify(text: str) -> str:
     lowered = text.lower()
+    # Retain explicit restrictions even alongside positive/negated sponsorship
+    # wording. This is a review signal, not a legal determination for a candidate.
+    for pattern in RESTRICTED_PATTERNS:
+        if re.search(pattern, lowered):
+            return "restricted"
     for pattern in SPONSORS_PATTERNS:
         if re.search(pattern, lowered):
             return "sponsors"
     for pattern in WORLDWIDE_PATTERNS:
         if re.search(pattern, lowered):
             return "worldwide"
-    for pattern in RESTRICTED_PATTERNS:
-        if re.search(pattern, lowered):
-            return "restricted"
     return "unknown"
 
 

@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from jobagent.config import settings
-from jobagent.matching.eligibility import classify, needs_unavailable_sponsorship
+from jobagent.matching.eligibility import classify
 from jobagent.matching.embeddings import cosine_similarity, embed
-from jobagent.matching.ollama_rank import rank_job
+from jobagent.matching.ollama_rank import rank_job, valid_score
+from jobagent.matching.constraints import review_reasons
 from jobagent.models import MatchScore
 from jobagent.profile.resume_parser import parse_resume
 from jobagent.sources.adzuna import AdzunaSource
@@ -39,36 +40,21 @@ ProgressFn = Callable[[str], None]
 
 
 def apply_sponsorship_exclusions(conn, on_progress: ProgressFn = print) -> int:
-    """Auto-exclude jobs in no-authorization countries (no sponsorship signal), including
-    domestic-remote ones (US/UK "remote" still needs local work authorization).
+    """Retire the former sponsorship auto-exclusion rule.
 
-    Runs independently of scoring so freshly-fetched jobs are filtered off the board
-    immediately, without waiting for an expensive match run. Only touches new/matched
-    jobs not already excluded — never disturbs drafted/applied jobs.
+    A missing sponsorship statement is not proof that a company will reject the
+    candidate. Keep the eligibility label, but let the actual ATS form collect the
+    truthful work-authorisation answer. Existing jobs excluded by the old rule are
+    restored so they can be scored and reviewed again.
     """
-    blocked = settings.load_preferences().get("sponsorship_required_countries", [])
-    if not blocked:
-        return 0
-    reason = SPONSORSHIP_EXCLUSION_REASON
-    rows = conn.execute(
-        """
-        SELECT j.id, j.location, j.remote, j.country, j.url,
-               COALESCE(m.eligibility, 'unknown') AS eligibility
-        FROM jobs j LEFT JOIN match_scores m ON j.id = m.job_id
-        WHERE j.status IN ('new', 'matched') AND j.excluded_reason IS NULL
-        """
-    ).fetchall()
-    ids = [
-        r["id"]
-        for r in rows
-        if needs_unavailable_sponsorship(
-            r["location"], r["country"], bool(r["remote"]), r["eligibility"], blocked, r["url"]
-        )
-    ]
-    if ids:
-        conn.executemany("UPDATE jobs SET excluded_reason = ? WHERE id = ?", [(reason, i) for i in ids])
-        on_progress(f"Auto-excluded {len(ids)} jobs in {', '.join(blocked)} (no sponsorship).")
-    return len(ids)
+    restored = conn.execute(
+        """UPDATE jobs SET excluded_reason = NULL
+           WHERE excluded_reason = ? AND status IN ('new', 'matched', 'drafted')""",
+        (SPONSORSHIP_EXCLUSION_REASON,),
+    ).rowcount
+    if restored:
+        on_progress(f"Restored {restored} role(s) previously hidden for unconfirmed sponsorship.")
+    return restored
 
 
 def run_fetch(url: Optional[str] = None, on_progress: ProgressFn = print) -> int:
@@ -131,9 +117,22 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print, dire
     resume_embedding = embed(profile.raw_text)
     prefs = settings.load_preferences()
     title_keywords = [kw.lower() for kw in prefs.get("title_filter_keywords", [])]
-    blocked_countries = prefs.get("sponsorship_required_countries", [])
 
     with db.connection() as conn:
+        # Recheck old active scores too: otherwise upgrading the matcher leaves
+        # previously auto-matched incompatible drafts in the preparation queue.
+        scored = conn.execute("SELECT j.* FROM jobs j JOIN match_scores m ON j.id=m.job_id "
+                              "WHERE j.status IN ('new','matched','drafted') AND j.excluded_reason IS NULL "
+                              "AND m.llm_score IS NOT NULL").fetchall()
+        for job in scored:
+            reasons = review_reasons(profile, job, prefs)
+            if reasons:
+                db.save_match_score(conn, MatchScore(job_id=job["id"], embedding_similarity=0.0,
+                    eligibility=classify(f"{job['title']} {job['location']} {job['description']}"),
+                    llm_reasoning="Review required: " + " ".join(reasons)))
+                if job["status"] in {"matched", "drafted"}:
+                    pipeline.transition(conn, job["id"], "new")
+        conn.commit()
         jobs = db.list_unscored_direct_ats_jobs(conn) if direct_only else db.list_jobs_without_score(conn)
         if limit:
             jobs = jobs[:limit]
@@ -150,33 +149,17 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print, dire
                 continue
 
             eligibility = classify(f"{job['title']} {job['location']} {job['description']}")
-
-            # Restricted roles (needs local work authorization we don't have) skip
-            # LLM ranking entirely — they can't be accepted regardless of fit.
-            if eligibility == "restricted":
-                db.save_match_score(
-                    conn,
-                    MatchScore(job_id=job["id"], embedding_similarity=0.0, eligibility=eligibility),
-                )
+            reasons = review_reasons(profile, job, prefs)
+            if reasons:
+                db.save_match_score(conn, MatchScore(
+                    job_id=job["id"], embedding_similarity=0.0, eligibility=eligibility,
+                    llm_reasoning="Review required: " + " ".join(reasons)))
+                # Never erase applied/interview history. An explicitly rescored
+                # active draft must not remain automatically actionable either.
+                if job["status"] in {"matched", "drafted"}:
+                    pipeline.transition(conn, job["id"], "new")
                 conn.commit()
-                on_progress(f"  [{job['id']}] {job['title']} @ {job['company']} — skipped (restricted)")
-                continue
-
-            # Jobs in countries needing sponsorship, with no sponsorship signal (incl.
-            # domestic-remote): score them (in case the user restores one) but auto-exclude.
-            country = job["country"] if "country" in job.keys() else None
-            if needs_unavailable_sponsorship(
-                job["location"], country, bool(job["remote"]), eligibility, blocked_countries, job["url"]
-            ):
-                db.save_match_score(
-                    conn,
-                    MatchScore(job_id=job["id"], embedding_similarity=0.0, eligibility="no-sponsorship"),
-                )
-                db.set_excluded(conn, job["id"], SPONSORSHIP_EXCLUSION_REASON)
-                conn.commit()
-                on_progress(
-                    f"  [{job['id']}] {job['title']} @ {job['company']} — auto-excluded (on-site, no sponsorship)"
-                )
+                on_progress(f"  [{job['id']}] held for hard-constraint review")
                 continue
 
             job_embedding = embed(job["description"] or job["title"])
@@ -188,6 +171,8 @@ def run_match(limit: Optional[int] = None, on_progress: ProgressFn = print, dire
                     llm_score, llm_reasoning = rank_job(
                         profile, job["title"], job["company"], job["location"], job["description"]
                     )
+                    if not valid_score(llm_score):
+                        llm_score, llm_reasoning = None, "Ranking deferred: invalid score"
                 except Exception as exc:  # preserve prior work; this job can be re-scored later
                     llm_reasoning = f"Ranking deferred: {type(exc).__name__}"
 
@@ -261,7 +246,7 @@ def draft_job(conn, job, profile, on_progress: ProgressFn = print) -> None:
     pipeline.transition(conn, job["id"], "drafted")
 
 
-def run_prepare(top_n: int = 3, on_progress: ProgressFn = print) -> None:
+def run_prepare(top_n: int = 3, on_progress: ProgressFn = print) -> dict:
     """Daily hands-off prep: fetch new jobs, match them, and draft materials for the
     top N highest-scored matched jobs not already drafted. Leaves a ready-to-review
     queue in the 'drafted' column — the human still submits each application."""
@@ -274,9 +259,10 @@ def run_prepare(top_n: int = 3, on_progress: ProgressFn = print) -> None:
     with db.connection() as conn:
         candidates = conn.execute(
             """
-            SELECT j.id, j.title, j.company, j.location, j.description
+            SELECT j.*
             FROM jobs j JOIN match_scores m ON j.id = m.job_id
             WHERE j.status = 'matched' AND j.excluded_reason IS NULL
+              AND m.llm_score BETWEEN 1 AND 10
             ORDER BY m.llm_score DESC, m.embedding_similarity DESC
             LIMIT ?
             """,
@@ -285,13 +271,20 @@ def run_prepare(top_n: int = 3, on_progress: ProgressFn = print) -> None:
 
         if not candidates:
             on_progress("=== prepare: no new matched jobs to draft ===")
-            return
+            return {"selected": 0, "drafted": 0, "failed": 0}
 
         on_progress(f"=== prepare: drafting top {len(candidates)} matches ===")
+        drafted, failed = 0, 0
         for job in candidates:
             try:
                 draft_job(conn, job, profile, on_progress)
+                drafted += 1
                 on_progress(f"  drafted [{job['id']}] {job['title']} @ {job['company']}")
             except Exception as exc:  # noqa: BLE001 - one draft failing shouldn't kill the run
-                on_progress(f"  FAILED [{job['id']}] {job['company']}: {exc}")
-    on_progress("=== prepare: done — review the 'drafted' column and submit ===")
+                failed += 1
+                on_progress(f"  FAILED [{job['id']}] {job['company']}: {type(exc).__name__}")
+    result = {"selected": len(candidates), "drafted": drafted, "failed": failed}
+    on_progress(f"=== prepare: {'incomplete' if failed else 'done'} — {drafted} drafted, {failed} failed ===")
+    if failed and not drafted:
+        raise RuntimeError(f"Preparation failed for all {failed} selected jobs")
+    return result

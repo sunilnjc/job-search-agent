@@ -35,7 +35,19 @@ def _extract_json(text: str) -> dict:
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         raise ValueError("No JSON object found in model output")
-    return json.loads(match.group(0))
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate ranking key")
+            result[key] = value
+        return result
+    return json.loads(match.group(0), object_pairs_hook=unique_keys)
+
+
+def valid_score(value) -> bool:
+    """Do not coerce booleans, decimal scores, or strings into a fit rating."""
+    return type(value) is int and 1 <= value <= 10
 
 
 def rank_job(profile: Profile, job_title: str, job_company: str, job_location: str, job_description: str) -> tuple[Optional[int], Optional[str]]:
@@ -43,7 +55,7 @@ def rank_job(profile: Profile, job_title: str, job_company: str, job_location: s
         summary=profile.summary or "(none extracted)",
         skills=", ".join(profile.skills) or "(none extracted)",
         titles=", ".join(profile.titles) or "(none extracted)",
-        years=profile.years_experience or "unknown",
+        years=profile.years_experience if profile.years_experience is not None else "unknown",
         resume_text=profile.raw_text[:3000],
         job_title=job_title,
         job_company=job_company,
@@ -71,8 +83,12 @@ def rank_job(profile: Profile, job_title: str, job_company: str, job_location: s
 
     try:
         data = _extract_json(content)
-        score = int(data.get("score"))
-        reasoning = str(data.get("reasoning", ""))
+        if not isinstance(data, dict) or not valid_score(data.get("score")):
+            return None, None
+        score = data["score"]
+        reasoning = data.get("reasoning", "")
+        if not isinstance(reasoning, str):
+            return None, None
         return score, reasoning
     except (ValueError, TypeError, json.JSONDecodeError):
         return None, None

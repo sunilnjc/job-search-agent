@@ -15,6 +15,7 @@ from jobagent.profile.answers import (
     NEEDS_INPUT,
     answer_for,
     approved_facts_block,
+    choice_for_question,
     collect,
     get_field,
     years_for_skill,
@@ -112,6 +113,32 @@ class QuestionRoutingTests(unittest.TestCase):
     def test_label_comes_from_the_matched_pattern(self):
         answer = answer_for("Do you need sponsorship?", data=self.data)
         self.assertEqual(answer.label, "Work authorization")
+
+    def test_sponsorship_select_uses_truthful_yes(self):
+        self.assertEqual(
+            choice_for_question(
+                "Will you require visa sponsorship now or in the future?",
+                ["Select...", "Yes", "No"],
+                data=self.data,
+            ),
+            "Yes",
+        )
+
+    def test_unlisted_country_authorization_requires_input(self):
+        self.assertIsNone(
+            choice_for_question(
+                "Are you authorized to work in Serbia?",
+                ["Yes", "No"],
+                data=self.data,
+            ),
+        )
+
+    def test_acknowledgement_select_uses_yes(self):
+        self.data["application"] = {"legal_acknowledgement": "Yes, I acknowledge."}
+        self.assertEqual(
+            choice_for_question("Please confirm that you have read the privacy notice", ["Yes", "No"], data=self.data),
+            "Yes",
+        )
 
 
 class NeedsInputTests(unittest.TestCase):

@@ -40,6 +40,38 @@ def _first(page, selector: str):
     return locator.first if locator.count() else None
 
 
+def _form_context(page):
+    """Return the Greenhouse iframe when an employer wraps the form in its own page."""
+    for frame in page.frames:
+        if "greenhouse.io" in frame.url and ("job_app" in frame.url or "job-boards" in frame.url):
+            return frame
+    return page
+
+
+def _open_form(page) -> object:
+    """Open an employer-hosted application shell and return its actual form context."""
+    # Employer sites such as Databricks mount an embedded Greenhouse iframe a few seconds
+    # after their own shell reaches domcontentloaded.
+    for _ in range(5):
+        form = _form_context(page)
+        if form is not page:
+            return form
+        page.wait_for_timeout(1_000)
+    apply_button = _first(
+        page,
+        "#apply_button, #filter-apply-handler, a[href*='application'], a[href*='/apply'], "
+        "a:has-text('Apply now'), button:has-text('Apply now'), a:has-text('Apply'), button:has-text('Apply')",
+    )
+    if apply_button:
+        apply_button.click(timeout=10_000)
+        page.wait_for_timeout(1_000)
+    return _form_context(page)
+
+
+def _has_captcha(page) -> bool:
+    return bool(page.locator("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], .g-recaptcha, .h-captcha").count())
+
+
 def _wait_for_upload(page, timeout_ms: int = 12_000):
     """N26 hydrates its embedded Greenhouse application form after page load.
 
@@ -49,7 +81,9 @@ def _wait_for_upload(page, timeout_ms: int = 12_000):
     selector = "input[type='file'][name*='resume' i], input[type='file']"
     locator = page.locator(selector)
     try:
-        locator.wait_for(state="attached", timeout=timeout_ms)
+        # A cover-letter upload often sits beside the resume control, so wait on the
+        # first match rather than requiring the multi-element locator to be singular.
+        locator.first.wait_for(state="attached", timeout=timeout_ms)
     except Exception:  # no form is a normal, reportable application exception
         return None
     return _first(page, selector)
@@ -71,13 +105,10 @@ def preflight(job: Mapping[str, object]) -> SubmissionResult:
             try:
                 page = browser.new_page(user_agent=BROWSER_UA)
                 page.goto(str(job["final_url"]), wait_until="domcontentloaded", timeout=45_000)
-                apply_button = _first(page, "#apply_button, a[href*='application'], a[href*='/apply'], a:has-text('Apply'), button:has-text('Apply')")
-                if apply_button:
-                    apply_button.click(timeout=10_000)
-                    page.wait_for_load_state("domcontentloaded", timeout=20_000)
-                if page.locator("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], .g-recaptcha, .h-captcha").count():
+                form = _open_form(page)
+                if _has_captcha(form):
                     return SubmissionResult("exception", "captcha_required")
-                if not _wait_for_upload(page):
+                if not _wait_for_upload(form):
                     return SubmissionResult("exception", "resume_upload_field_not_found")
                 return SubmissionResult("ready_for_submission")
             finally:
@@ -114,19 +145,14 @@ def submit(job: Mapping[str, object], resume: Path, cover_letter: Path) -> Submi
             try:
                 page = browser.pages[0] if browser.pages else browser.new_page()
                 page.goto(str(job["final_url"]), wait_until="domcontentloaded", timeout=45_000)
-                apply_button = _first(
-                    page,
-                    "#apply_button, a[href*='application'], a[href*='/apply'], a:has-text('Apply'), button:has-text('Apply')",
-                )
-                if apply_button:
-                    apply_button.click(timeout=10_000)
-                    page.wait_for_load_state("domcontentloaded", timeout=20_000)
-                if page.locator("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], .g-recaptcha, .h-captcha").count():
+                form = _open_form(page)
+                if _has_captcha(form):
                     return SubmissionResult("exception", "captcha_required")
 
                 values = {
                     "#first_name, input[name='first_name']": first_name,
                     "#last_name, input[name='last_name']": last_name,
+                    "#preferred_name, input[name='preferred_name']": first_name,
                     "#email, input[name='email']": email,
                 }
                 if phone:
@@ -134,27 +160,59 @@ def submit(job: Mapping[str, object], resume: Path, cover_letter: Path) -> Submi
                 if location:
                     values["#location, input[name='location']"] = location
                 for selector, value in values.items():
-                    field = _first(page, selector)
+                    field = _first(form, selector)
                     if field:
                         field.fill(value)
                 if country:
-                    country_field = _first(page, "#country, select[name='country']")
+                    country_field = _first(form, "#country, select[name='country']")
                     if country_field:
-                        country_field.select_option(label=country)
-                resume_field = _wait_for_upload(page)
+                        tag_name = country_field.evaluate("element => element.tagName.toLowerCase()")
+                        if tag_name == "select":
+                            country_field.select_option(label=country)
+                        else:
+                            # Modern embedded Greenhouse forms use a searchable country
+                            # combobox rather than a native <select>.
+                            country_field.fill(country)
+                            country_field.press("ArrowDown")
+                            country_field.press("Enter")
+                resume_field = _wait_for_upload(form)
                 if not resume_field:
                     return SubmissionResult("exception", "resume_upload_field_not_found")
                 resume_field.set_input_files(str(resume))
-                cover_field = _first(page, "input[type='file'][name*='cover' i]")
+                cover_field = _first(form, "input[type='file'][name*='cover' i]")
                 if cover_field:
                     cover_field.set_input_files(str(cover_letter))
 
-                # Greenhouse custom questions have stable question_* IDs. Inspect their
-                # visible labels before generic required controls so Telegram can tell Sunil
-                # the real question (e.g. right-to-work) rather than "text,text,text".
-                questions = page.locator("[id^='question_']").evaluate_all(
+                # Handle required checkbox/radio groups as a single question, rather
+                # than prompting once per option. Explicit choices are saved by their
+                # visible group question in the private approval library.
+                groups = form.locator("fieldset[id^='question_']").evaluate_all(
                     """els => els.map(e => ({
-                      id: e.id, tag: e.tagName, required: !!e.required,
+                      id: e.id,
+                      label: (e.innerText || '').split('\\n')[0].trim(),
+                      required: !!e.querySelector('input[required]'),
+                      options: [...e.querySelectorAll('input[type=checkbox], input[type=radio]')].map(input => ({
+                        id: input.id,
+                        label: (document.querySelector(`label[for='${input.id}']`) || {}).innerText || ''
+                      }))
+                    }))"""
+                )
+                for group in groups:
+                    label = str(group.get("label") or "").strip()
+                    options = [str(option.get("label") or "") for option in group.get("options", [])]
+                    choice = answers.choice_for_question(label, options)
+                    if not choice and group.get("required"):
+                        return SubmissionResult("exception", "required_question_needs_input:" + (label or group["id"]))
+                    if choice:
+                        option = next((item for item in group["options"] if item.get("label") == choice), None)
+                        if option:
+                            # Greenhouse checkbox IDs can contain [] which is not valid
+                            # CSS in a raw #id selector.
+                            form.locator(f'[id="{option["id"]}"]').check()
+
+                questions = form.locator("input[id^='question_'], textarea[id^='question_'], select[id^='question_']").evaluate_all(
+                    """els => els.filter(e => !e.closest('fieldset')).map(e => ({
+                      id: e.id, tag: e.tagName, type: e.type, required: !!e.required,
                       label: (document.querySelector(`label[for='${e.id}']`) || {}).innerText || ''
                     }))"""
                 )
@@ -162,28 +220,35 @@ def submit(job: Mapping[str, object], resume: Path, cover_letter: Path) -> Submi
                     label = str(question.get("label") or "").strip()
                     required_question = bool(question.get("required")) or label.endswith("*")
                     answer = answers.answer_for(label) if label else None
-                    if required_question and (answer is None or answer.needs_input):
+                    custom = answers.custom_answer_for(label) if label else None
+                    if required_question and not custom and (answer is None or answer.needs_input):
                         return SubmissionResult("exception", "required_question_needs_input:" + (label or question["id"]))
-                    if answer and answer.value:
-                        field = page.locator(f"#{question['id']}")
-                        if str(question["tag"]).lower() == "select":
+                    field = form.locator(f'[id="{question["id"]}"]')
+                    if str(question["tag"]).lower() == "select":
+                        options = field.locator("option").all_text_contents()
+                        choice = answers.choice_for_question(label, options)
+                        if choice:
+                            field.select_option(label=choice)
+                        elif answer and answer.value:
                             field.select_option(label=answer.value)
-                        else:
-                            field.fill(answer.value)
+                    elif custom:
+                        field.fill(custom)
+                    elif answer and answer.value:
+                        field.fill(answer.value)
 
-                required = page.locator("input[required], textarea[required], select[required]").evaluate_all(
+                required = form.locator("input[required], textarea[required], select[required]").evaluate_all(
                     "els => els.filter(e => e.type !== 'hidden' && !e.value && e.type !== 'file').map(e => e.name || e.id || e.type)"
                 )
                 if required:
                     return SubmissionResult("exception", "required_question_needs_input:" + ",".join(required[:3]))
-                if page.locator("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], .g-recaptcha, .h-captcha").count():
+                if _has_captcha(form):
                     return SubmissionResult("exception", "captcha_required")
-                submit_button = _first(page, "input[type='submit'], button[type='submit']")
+                submit_button = _first(form, "input[type='submit'], button[type='submit']")
                 if not submit_button:
                     return SubmissionResult("exception", "submit_button_not_found")
                 submit_button.click(timeout=10_000)
                 page.wait_for_timeout(2_000)
-                text = page.locator("body").inner_text().lower()
+                text = form.locator("body").inner_text().lower()
                 if "thank you" in text or "application submitted" in text or "application received" in text:
                     return SubmissionResult("submitted")
                 return SubmissionResult("exception", "submission_confirmation_not_detected")

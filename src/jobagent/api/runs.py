@@ -5,6 +5,7 @@ import uuid
 from typing import Callable
 
 from jobagent.service import run_fetch, run_match
+from jobagent.privacy_logging import append_run_event, safe_exception_event, safe_progress_event
 
 RUNS: dict[str, dict] = {}
 # {run_id: {"status": "running"|"done"|"error", "log": [str, ...]}}
@@ -15,14 +16,14 @@ def _start(target: Callable[[Callable[[str], None]], None]) -> str:
     RUNS[run_id] = {"status": "running", "log": []}
 
     def on_progress(msg: str) -> None:
-        RUNS[run_id]["log"].append(msg)
+        append_run_event(RUNS[run_id]["log"], safe_progress_event(msg))
 
     def worker() -> None:
         try:
             target(on_progress)
             RUNS[run_id]["status"] = "done"
         except Exception as exc:  # noqa: BLE001 - surface any failure to the poller
-            RUNS[run_id]["log"].append(f"ERROR: {exc}")
+            append_run_event(RUNS[run_id]["log"], safe_exception_event(exc))
             RUNS[run_id]["status"] = "error"
 
     threading.Thread(target=worker, daemon=True).start()
@@ -45,7 +46,7 @@ def start_autopilot(limit: int | None = None) -> str:
 
         results = process_ready_queue(limit=limit)
         if not results:
-            on_progress("No Ready roles meet the strict direct-source and eligibility rule.")
+            on_progress("No Ready roles meet the score and direct-source rule.")
             return
         for result in results:
             detail = result.reason or result.final_url or ""
