@@ -29,6 +29,7 @@ from .repository import _jwt_role
 MAX_WEBHOOK_BYTES = 256 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_UNITS = 9_000_000_000_000_000
+OPERATION_CLOCK_SKEW = 300  # seconds the database clock may run ahead of this server
 BILLING_TABLES = ("mobile_billing_accounts", "mobile_billing_events", "mobile_billing_operations")
 BILLING_EXPORT_VIEW = "mobile_billing_export"
 BILLING_EXPORT_COLUMNS = ("account_id", "user_id", "provider", "mode", "status", "plan_key",
@@ -365,7 +366,8 @@ class StripeTestProvider:
         operation_id = _uuid(operation["id"])
         if operation.get("state") == "pending":
             created = datetime.fromisoformat(operation["created_at"].replace("Z", "+00:00"))
-            if created.tzinfo is None or not 0 <= clock() - created.timestamp() < 23 * 3600:
+            # created_at is the database clock; allow bounded skew ahead of this server.
+            if created.tzinfo is None or not -OPERATION_CLOCK_SKEW <= clock() - created.timestamp() < 23 * 3600:
                 raise unavailable()
         elif operation.get("state") != "complete":
             raise unavailable()
@@ -772,11 +774,15 @@ class BillingService:
         provider = self._provider()
         account = await self.store.rpc("mobile_billing_reconcile_claim", p_user_id=user_id,
                                        p_provider=provider.name, p_mode=provider.mode)
-        if account.get("status") == "rate_limited":
-            raise HTTPException(429, "Please wait 30 seconds before verifying billing again.",
-                                headers={"Retry-After": "30"})
-        if account.get("status") == "none":
-            return {"status": "none"}
+        # Signals carry no account id. A claimed account row also has a `status`
+        # column (e.g. 'none' before the first subscription), which is not a signal.
+        if "id" not in account:
+            if account.get("status") == "rate_limited":
+                raise HTTPException(429, "Please wait 30 seconds before verifying billing again.",
+                                    headers={"Retry-After": "30"})
+            if account.get("status") == "none":
+                return {"status": "none"}
+            raise unavailable()
         try:
             snapshot = await provider.fetch_subscription(account["customer_id"])
             result = await self.store.rpc("mobile_billing_apply_snapshot", p_account_id=account["id"],

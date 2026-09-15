@@ -217,6 +217,15 @@ class BillingRPCModel:
             account = self.claim()
             self.events[key]["lease_token"] = account["lease_token"]
             return account
+        if name == "mobile_billing_reconcile_claim":
+            if self.erasing or p["p_user_id"] != USER_A:
+                return {"status": "blocked"}
+            if not self.account["customer_id"]:
+                return {"status": "none"}
+            account = self.claim()
+            key = "sync_" + str(uuid4())
+            self.events[key] = {"digest": key, "state": "pending", "lease_token": account["lease_token"]}
+            return {**account, "event_id": key}
         if name == "mobile_billing_apply_snapshot":
             row = self.events[p["p_event_id"]]
             if (self.erasing or p["p_lease_token"] != self.account["lease_token"]
@@ -578,6 +587,34 @@ class BillingTransportTests(unittest.IsolatedAsyncioTestCase):
                      "created_at": datetime.fromtimestamp(NOW - 23 * 3600, timezone.utc).isoformat()}
         with self.assertRaises(HTTPException):
             await self.provider.create_customer(USER_A, "verified@example.test", operation)
+        self.assertFalse(self.stripe.requests)
+
+    async def test_pending_creation_tolerates_small_database_clock_skew_only(self):
+        # created_at comes from the database clock, which may run slightly ahead.
+        ahead = {"id": str(uuid4()), "state": "pending",
+                 "created_at": datetime.fromtimestamp(NOW + 30, timezone.utc).isoformat()}
+        await self.provider.create_customer(USER_A, "verified@example.test", ahead)
+        self.assertTrue([r for r in self.stripe.requests if r.method == "POST"])
+        self.stripe.requests.clear()
+        implausible = {"id": str(uuid4()), "state": "pending",
+                       "created_at": datetime.fromtimestamp(NOW + 3600, timezone.utc).isoformat()}
+        with self.assertRaises(HTTPException):
+            await self.provider.create_customer(USER_A, "verified@example.test", implausible)
+        self.assertFalse(self.stripe.requests)
+
+    async def test_reconcile_row_with_none_status_still_fetches_applies_and_releases(self):
+        # The claimed account row has its own `status` column ('none' before the
+        # first subscription). It must not be mistaken for the no-customer signal.
+        self.assertEqual(self.rpc.account["status"], "none")
+        result = await self.service.reconcile(self.repo)
+        self.assertEqual(result["status"], "applied")
+        self.assertIn("rpc:mobile_billing_apply_snapshot", self.rpc.timeline)
+        self.assertTrue([r for r in self.stripe.requests if r.method == "GET"])
+        self.assertIsNone(self.rpc.account["lease_token"])
+
+    async def test_reconcile_without_customer_returns_none_without_provider_fetch(self):
+        self.rpc.account["customer_id"] = None
+        self.assertEqual(await self.service.reconcile(self.repo), {"status": "none"})
         self.assertFalse(self.stripe.requests)
 
     async def test_ignored_signed_event_has_no_rpc_or_provider_fetch(self):
