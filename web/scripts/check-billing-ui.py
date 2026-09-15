@@ -105,6 +105,25 @@ def main():
             print(evidence[-1])
             context.close()
 
+        for width in (1440, 390):
+            # Stripe success/cancel return: opens billing from the query hint only,
+            # strips it, loads server status once and never shows paid access.
+            for query in ("return", "cancelled"):
+                context, page, state, base = billing_context(browser, width)
+                page.goto(fixture.BASE + f"?billing={query}&paid=true")
+                expect(page.get_by_role("heading", name="Choose your job-search plan", exact=True)).to_be_visible()
+                expect(page.get_by_role("button", name="Refresh billing", exact=True)).to_be_enabled()
+                assert "billing=" not in page.url, page.url
+                assert state["gets"] == 1 and not state["writes"] and not state["status"]["access"]["allowed"]
+                page.reload()
+                expect(page.get_by_role("button", name="Your profile", exact=True)).to_be_visible()
+                assert state["gets"] == 1, "refresh after return must not reopen billing"
+                fixture.no_overflow(page)
+                clean(base)
+                evidence.append(f"PASS billing {width}px return={query}: opens billing, strips hint, one status read, no writes or access")
+                print(evidence[-1])
+                context.close()
+
         for width, mode in [(1440, "disabled"), (390, "disabled"), (390, "subscription"), (390, "unsafe"), (1440, "write_failure"), (390, "invite_denied"), (390,"live_unapproved"), (1440,"live_approved")]:
             context, page, state, base = billing_context(browser, width, mode=mode)
             open_billing(page)

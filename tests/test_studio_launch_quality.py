@@ -157,18 +157,22 @@ class StudioLaunchQualityTests(unittest.TestCase):
 
     def test_identity_is_not_a_professional_summary_or_cover_example(self):
         candidate = context()
-        output = selection(candidate, summary=["profile.display_name"], experience=["career_text.0"],
-                           cover_letter=["profile.display_name", "career_text.0"])
+        output = selection(candidate, experience=["career_text.0"], cover_letter=["career_text.0"])
         result, resume, letter, _ = self.render(candidate, output)
         self.assertNotIn("Professional Summary", self.sections(resume))
-        self.assertNotIn("profile.display_name", result[0]["source_ids"])
         self.assertEqual([b.text for b in letter].count("Mira Example"), 2)  # header and signature only
+        # Identity is not offered to the model, so an identity citation is rejected outright.
+        output["summary"] = [{"text": "Mira Example", "source_ids": ["profile.display_name"]}]
+        with self.assertRaises(studio.MissingFactsError):
+            self.render(candidate, output)
 
     def test_heading_or_identity_only_model_output_is_not_a_successful_document(self):
-        for text, ref in (("SKILLS", "career_text.0"), ("Prepared monthly forecasts.", "profile.display_name")):
+        for text, ref, claimed in (("SKILLS", "career_text.0", "SKILLS"),
+                                   ("Prepared monthly forecasts.", "profile.display_name", "Mira Example")):
             candidate = context()
             candidate["career_text"] = text
-            output = selection(candidate, experience=[ref], cover_letter=[ref])
+            output = selection(candidate)
+            output["experience"] = output["cover_letter"] = [{"text": claimed, "source_ids": [ref]}]
             with self.subTest(ref=ref), self.assertRaises(studio.MissingFactsError):
                 self.render(candidate, output)
 

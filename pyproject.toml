@@ -23,7 +23,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-web = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+# FastAPI is capped at the release line the regression suite runs against; the
+# unpinned 0.141/Starlette 1.6 resolution failed billing and route tests in CI.
+web = ["fastapi>=0.110,<0.129", "uvicorn[standard]>=0.29"]
 
 [project.scripts]
 jobagent = "jobagent.cli:app"

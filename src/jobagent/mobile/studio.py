@@ -246,11 +246,29 @@ _DECLARATION = re.compile(
     r"\b(?:certify|attest|declaration|swear)\b|(?:without|no)\s+(?:ai|outside|external)\s+(?:help|assistance)|"
     r"(?:must|required to)\s+complete.{0,60}(?:alone|yourself|independently)|solely\s+(?:my|your)\s+own", re.I)
 _WORK_RIGHTS = re.compile(r"\b(?:authori[sz](?:ed|ation)|eligib\w*|sponsor\w*|visa|work\s+(?:rights|permit))\b", re.I)
+# Direct identifiers are not sent to AI providers. `_identity` restores them
+# from the owner's profile when documents are rendered.
 _PROFILE_FIELDS = {
-    "display_name", "full_name", "name", "email", "phone", "base_location", "location",
+    "base_location", "location",
     "headline", "summary", "skills", "experience", "employment", "education", "certifications",
-    "projects", "achievements", "languages", "linkedin", "github", "portfolio", "website",
+    "projects", "achievements", "languages",
 }
+_CONTACT_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_CONTACT_PHONE = re.compile(r"(?<![\w%])(?:\+|00)?\d(?:[\s().-]*\d){8,14}(?![\w%])")
+_CONTACT_PROFILE = re.compile(r"(?:https?://|www\.)\S+|\b(?:linkedin\.com|github\.com)/\S+", re.I)
+
+
+def _without_contact(text: str, names: tuple[str, ...] = ()) -> str:
+    """Remove contact identifiers from free resume text before model requests.
+
+    Phone matching needs at least nine digits, so years, date ranges and
+    percentages remain. Postal addresses are not reliably detectable here.
+    """
+    for name in names:
+        text = re.sub(r"(?<!\w)" + re.escape(name) + r"(?!\w)", "[name removed]", text, flags=re.I)
+    text = _CONTACT_EMAIL.sub("[email removed]", text)
+    text = _CONTACT_PROFILE.sub("[link removed]", text)
+    return _CONTACT_PHONE.sub(lambda m: "[phone removed]" if re.search(r"[\s().+-]", m.group()) else m.group(), text)
 _PREFERENCE_FIELDS = {"target_titles", "preferred_locations", "preferred_regions", "remote_preference",
                       "work_authorization_notes", "sponsorship_required"}
 _JOB_FIELDS = {"title", "company_name", "description", "location_text", "workplace_type", "employment_type"}
@@ -318,10 +336,12 @@ def _context(context: dict) -> tuple[dict, list[dict]]:
     description = _input_text(job.get("description") or "")
     for index, segment in enumerate(job_segments(description)):
         add(f"job.requirements.{index}", segment, "job")
+    names = tuple(clean_text(profile[key]) for key in ("display_name", "full_name", "name")
+                  if isinstance(profile.get(key), str) and len(clean_text(profile[key])) >= 3)
     career = _input_text(context.get("career_text") or "")
     for index, line in enumerate(career.splitlines()):
         if line.strip():
-            add(f"career_text.{index}", line, "candidate")
+            add(f"career_text.{index}", _without_contact(line, names), "candidate")
     answers = context.get("answers") or []
     if not isinstance(answers, list) or len(answers) > 100:
         raise StudioError("Answers must be a list of at most 100 confirmed records.")
@@ -348,7 +368,7 @@ def _context(context: dict) -> tuple[dict, list[dict]]:
         if facts and facts[-1]["id"] == f"answers.{index}":
             confirmed_answers.append({"source_id": f"answers.{index}", "question": answer["question"],
                                       "answer": answer["answer"], "scope": scope})
-    resume = _input_text(context.get("resume_text") or "")
+    resume = _without_contact(_input_text(context.get("resume_text") or ""), names)
     payload = {"source_facts": facts, "unconfirmed_resume_text": resume,
                "career_background": {"profession": profession, "experience_level": background.experience_level,
                                      "qualifications": qualifications},
