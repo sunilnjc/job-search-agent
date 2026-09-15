@@ -40,7 +40,7 @@ class SQLStore:
         self.calls.append(name)
         args = []
         for key, value in params.items():
-            assert re.fullmatch(r"p_[a-z_]+", key)
+            assert re.fullmatch(r"p_[a-z0-9_]+", key)  # e.g. p_body_sha256
             literal = "null" if value is None else "'" + (json.dumps(value) if isinstance(value, dict) else str(value)).replace("'", "''") + "'"
             args.append(key + " => " + literal)
         raw = self.db.execute("begin; set local request.jwt.claim.role='service_role'; select public." + name + "(" + ",".join(args) + "); commit;")
