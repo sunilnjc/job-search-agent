@@ -21,6 +21,7 @@ import { DiscoveryPanel } from "./DiscoveryPanel";
 import { discoveryContextKey } from "./discovery";
 import type { DiscoverySnapshot } from "./discovery";
 import { BillingPanel } from "./BillingPanel";
+import { billingRouteRequested } from "./billing";
 import "./beta.css";
 import "./pursuit-theme.css";
 
@@ -83,7 +84,15 @@ function BetaSession() {
 function SignedInWorkspace({ session, initialPrivacy = false }: { session: Session; initialPrivacy?: boolean }) {
   const [view, setView] = useState<View>("today");
   const [privacyOpen, setPrivacyOpen] = useState(initialPrivacy);
-  const [billingOpen, setBillingOpen] = useState(false);
+  // A Checkout/portal return only reopens the billing view; the panel then asks
+  // the server for status. The query is a hint, never payment proof.
+  const [billingOpen, setBillingOpen] = useState(() => {
+    if (typeof window === "undefined" || !billingRouteRequested(window.location.search)) return false;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("billing");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    return true;
+  });
   const [profile, setProfile] = useState<BetaProfile | null>(null);
   const [preferences, setPreferences] = useState<JobPreferences | null>(null);
   const [jobs, setJobs] = useState<BetaJob[]>([]);

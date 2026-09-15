@@ -274,13 +274,33 @@ class StudioTests(OfflineCase):
             self.assertIn("https://example.org/alex", links)
             self.assertIn("mailto:alex@example.org", links)
             if item["kind"] == "tailored_resume":
-                for heading in ("Professional Summary", "Work Experience", "Education", "Skills"):
+                # Results not attributed to the single employment line stay in a
+                # neutral section; a summary duplicating them is not repeated.
+                for heading in ("Work Experience", "Selected Career Contributions", "Education", "Skills"):
                     self.assertIn(heading, text)
+                self.assertNotIn("Professional Summary", text)
+                self.assertEqual(text.count("Built Python services for internal reporting."), 1)
             if os.getenv("MOBILE_STUDIO_QA_DIR"):
                 directory = Path(os.environ["MOBILE_STUDIO_QA_DIR"])
                 directory.mkdir(parents=True, exist_ok=True)
                 extension = item["filename"].rsplit(".", 1)[-1]
                 (directory / (item["kind"] + "." + extension)).write_bytes(item["content"])
+
+    def test_model_payload_excludes_direct_contact_identifiers(self):
+        context = dict(self.context)
+        context["profile"] = dict(context["profile"], phone="+44 20 7946 0958",
+                                  linkedin="https://linkedin.com/in/alex-example")
+        context["career_text"] = ("Alex Example | alex@example.org | +44 20 7946 0958 | linkedin.com/in/alex-example\n"
+                                  + context["career_text"])
+        context["resume_text"] = "Contact alex@example.org or (020) 7946-0958, https://example.org/alex"
+        payload, _ = studio._context(context)
+        sent = json.dumps(payload, ensure_ascii=False)
+        for identifier in ("Alex Example", "alex@example.org", "7946", "linkedin.com/in/alex-example", "https://example.org/alex"):
+            self.assertNotIn(identifier, sent)
+        self.assertNotIn('"profile.display_name"', sent)
+        # Task-relevant facts are preserved.
+        for kept in ("20%", "2021-2025", "Built Python services for internal reporting."):
+            self.assertIn(kept, sent)
 
     def test_input_bounds_and_variant_path_injection(self):
         with self.assertRaises(studio.StudioError):

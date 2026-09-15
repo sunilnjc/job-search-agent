@@ -103,8 +103,9 @@ class DeterministicProvider:
         ledger = {fact["id"]: fact for fact in payload["source_facts"]}
         # Fail on real app->studio context regressions, rather than adapting the
         # expected output to whatever incomplete context happened to arrive.
-        assert ledger["profile.display_name"]["text"] == NAME
-        assert ledger["profile.email"]["text"] == EMAIL_A
+        # Direct identifiers are rendered from the profile, never sent to the model.
+        assert "profile.display_name" not in ledger and "profile.email" not in ledger
+        assert NAME not in json.dumps(payload) and EMAIL_A not in json.dumps(payload)
         for index, line in enumerate(CAREER_LINES):
             assert ledger[f"career_text.{index}"]["text"] == line
         assert payload["role_context"]["job_title"] == JOB["title"]
@@ -271,7 +272,11 @@ class Journey:
             self.check(1 <= len(document.pages) <= (1 if row["kind"] == "cover_letter" else 2), label + " PDF page bound")
             text = "\n".join(page.extract_text() or "" for page in document.pages)
         self.check(NAME in text, label + " candidate name")
-        self.check(any(line in text for line in CAREER_LINES), label + " confirmed career content")
+        # PDF extraction wraps lines; letters may add only the audited "I" subject.
+        from jobagent.mobile.writing import letter_sentence
+        flowing = " ".join(text.split())
+        self.check(any(line in flowing or letter_sentence(line)[0] in flowing for line in CAREER_LINES),
+                   label + " confirmed career content")
         self.check(FOREIGN_MARKER not in text, label + " no foreign content")
         if not source:
             self.check(UNCONFIRMED_MARKER not in text, label + " no unconfirmed content")

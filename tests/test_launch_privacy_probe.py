@@ -97,7 +97,15 @@ class LaunchPrivacyProbeTests(OfflineCase):
     def test_all_registered_mobile_operations_deny_missing_bearer_before_network(self):
         self.client.headers.clear()
         tested = 0
-        for route in self.app.routes:
+        def flatten(routes):
+            # Newer FastAPI can expose included routers as nested route objects.
+            for item in routes:
+                nested = getattr(item, "routes", None) or getattr(getattr(item, "router", None), "routes", None)
+                if nested is not None and not hasattr(item, "path"):
+                    yield from flatten(nested)
+                elif hasattr(item, "path") and getattr(item, "methods", None):
+                    yield item
+        for route in flatten(self.app.routes):
             if route.path in {"/api/mobile/health", "/api/mobile/version"}:
                 continue
             path = route.path
