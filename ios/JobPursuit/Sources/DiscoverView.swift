@@ -2,9 +2,12 @@ import SwiftUI
 
 struct DiscoverView: View {
     @EnvironmentObject private var store: AppStore
+    @State private var segment = "Recommendations"
     @State private var search = ""
     @State private var filter = "All"
     @State private var add = false
+    @State private var profile = false
+    private var currentDiscovery: DiscoverySearchState? { store.discovery.scope == store.discoveryScope ? store.discovery : nil }
     var jobs: [Opportunity] {
         store.workspace.rankedJobs.filter { job in
             (search.isEmpty || "\(job.title) \(job.companyName) \(job.displayLocation)".localizedCaseInsensitiveContains(search)) && (filter != "Strong fit" || (job.score ?? 0) >= 8) && (filter != "Remote" || job.workplaceType == "remote")
@@ -13,19 +16,158 @@ struct DiscoverView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                SheetHeader(eyebrow: "Possibility, curated", title: "Find your fit.", detail: "A shortlist with purpose. Start with a role you love, then understand why it fits.")
-                HStack { Image(systemName: "magnifyingglass").foregroundStyle(Pursuit.muted); TextField("Role, company or location", text: $search).accessibilityIdentifier("discover.search") }.padding(16).background(Pursuit.card, in: RoundedRectangle(cornerRadius: 17))
-                HStack(spacing: 9) { ForEach(["All", "Strong fit", "Remote"], id: \.self) { item in Button { filter = item } label: { Text(item).font(.subheadline.weight(.medium)).padding(.horizontal, 17).padding(.vertical, 11).foregroundStyle(filter == item ? .white : Pursuit.ink).background(filter == item ? Pursuit.night : Pursuit.card, in: Capsule()) }.buttonStyle(.plain) } }
-                HStack { Eyebrow(text: "\(jobs.count) opportunities"); Spacer(); Text("Best match first").font(.caption).foregroundStyle(Pursuit.muted) }
-                ForEach(jobs) { job in NavigationLink(value: job) { JobCard(job: job) }.buttonStyle(.plain) }
-                if jobs.isEmpty { EmptyPanel(icon: "scope", title: search.isEmpty ? "Your search starts here" : "No matches in your shortlist", detail: search.isEmpty ? "Add a job URL and its description. Your profile gives the match analysis context." : "Try a different keyword or remove a filter.") }
-                PrimaryButton(title: "Add an opportunity", icon: "plus") { add = true }.accessibilityIdentifier("discover.add")
+                SheetHeader(eyebrow: "Possibility, curated", title: "Find your fit.", detail: "Explore selected employer boards, then choose which roles belong in your shortlist.")
+                Picker("Discover collection", selection: $segment) {
+                    Text("Recommendations").tag("Recommendations")
+                    Text("Saved").tag("Saved")
+                }.pickerStyle(.segmented).accessibilityIdentifier("discover.collection")
+                if segment == "Recommendations" { recommendations } else { savedRoles }
             }.padding(22).frame(maxWidth: 700).frame(maxWidth: .infinity)
         }.pursuitPage().navigationTitle("Discover").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { add = true } label: { Image(systemName: "plus") }.accessibilityLabel("Add opportunity") } }
             .navigationDestination(for: Opportunity.self) { JobDetailView(jobId: $0.id) }
             .sheet(isPresented: $add) { AddOpportunityView() }
-            .refreshable { await store.perform { try await store.reload() } }
+            .sheet(isPresented: $profile) { ProfileView() }
+            .task(id: store.discoveryScope) { await store.loadDiscovery() }
+            .refreshable { await refresh() }
+    }
+    private var savedRoles: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack { Image(systemName: "magnifyingglass").foregroundStyle(Pursuit.muted); TextField("Search saved roles", text: $search).accessibilityIdentifier("discover.search") }.padding(16).background(Pursuit.card, in: RoundedRectangle(cornerRadius: 17))
+            HStack(spacing: 9) { ForEach(["All", "Strong fit", "Remote"], id: \.self) { item in Button { filter = item } label: { Text(item).font(.subheadline.weight(.medium)).padding(.horizontal, 17).padding(.vertical, 11).foregroundStyle(filter == item ? .white : Pursuit.ink).background(filter == item ? Pursuit.night : Pursuit.card, in: Capsule()) }.buttonStyle(.plain) } }
+            HStack { Eyebrow(text: "\(jobs.count) saved roles"); Spacer(); Button("Refresh") { Task { await refresh() } }.disabled(store.isBusy) }
+            ForEach(jobs) { job in NavigationLink(value: job) { JobCard(job: job) }.buttonStyle(.plain) }
+            if jobs.isEmpty { EmptyPanel(icon: "bookmark", title: "No saved roles here", detail: "Save a recommendation or add a role yourself. Search and filters apply only to this saved list.") }
+            if let error = store.discoverySaveError { Text(error).font(.subheadline).foregroundStyle(Pursuit.muted) }
+            PrimaryButton(title: "Add an opportunity", icon: "plus") { add = true }.accessibilityIdentifier("discover.add")
+        }
+    }
+    @ViewBuilder private var recommendations: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Your recommendations").font(.title2.weight(.semibold))
+            Text("Selected employer boards, using your saved preferences. No AI credits, automatic saving or applications. Employers do not receive your profile.").font(.subheadline).foregroundStyle(Pursuit.muted)
+            if store.isPreview {
+                Text("Live recommendations are off in this fictional preview. Explore the Saved collection instead.").font(.subheadline)
+            } else if !store.hasDiscoveryPreferences {
+                Text("Choose at least one target role to start your search.").font(.subheadline)
+                Button("Choose target roles in Profile") { profile = true }.accessibilityIdentifier("discover.preferences")
+            } else {
+                Text("Target roles: \((store.workspace.preferences?.targetTitles ?? []).joined(separator: ", "))").font(.subheadline)
+                Button("Edit saved preferences") { profile = true }.disabled(store.isBusy)
+            }
+            if !store.isPreview && (store.workspace.profile?.careerText ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("An uploaded resume is not yet confirmed career information. Review its facts in Studio to personalize results; until then, search uses your saved preferences.").font(.subheadline)
+                NavigationLink("Review resume facts in Studio") { StudioView() }.accessibilityIdentifier("discover.reviewFacts")
+            }
+            Button { Task { await store.loadDiscovery(refresh: true) } } label: { Label("Refresh recommendations", systemImage: "arrow.clockwise") }
+                .disabled(store.isBusy || store.isPreview || !store.hasDiscoveryPreferences)
+                .accessibilityIdentifier("discover.refresh")
+        }.cardSurface()
+        if currentDiscovery?.isLoading == true {
+            ProgressView("Checking employer boards…").accessibilityIdentifier("discover.loading")
+        }
+        if let failure = currentDiscovery?.failure {
+            Text(failure.localizedDescription).font(.subheadline).cardSurface().accessibilityIdentifier("discover.failure")
+        }
+        if let error = store.discoverySaveError { Text(error).font(.subheadline).cardSurface() }
+        if let result = currentDiscovery?.response {
+            if result.status == "unavailable" {
+                EmptyPanel(icon: "wifi.exclamationmark", title: "Sources unavailable", detail: "The configured sources failed. This is not a successful search with no matches. Review coverage below and refresh later.")
+            } else {
+                Text("\(result.returnedCount) shown · \(result.matchedCount) matching postings").font(.subheadline.weight(.medium))
+                Text("\(result.ranking == "profile_rules_v1" ? "Ordered by explained profile rules" : "Filtered by saved preferences, without confirmed career evidence"). Checked \(discoveryDate(result.searchedAt)). Results are not saved.").font(.caption).foregroundStyle(Pursuit.muted)
+                if result.results.isEmpty {
+                    EmptyPanel(icon: "scope", title: "No matches in this source sample", detail: "Your location and work preferences have not changed. Review preferences or refresh later; these boards are not the whole job market.")
+                    Button("Review preferences") { profile = true }
+                }
+            }
+            if result.partial || result.truncated || result.status == "partial" {
+                Text("Partial coverage: a source failed, omitted postings or reached a limit. This is not a complete view of those boards.").font(.subheadline).foregroundStyle(Pursuit.muted)
+            }
+            if let warnings = result.warnings, !warnings.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Search limitations to review").font(.headline)
+                    ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in Text(warning).font(.subheadline) }
+                }.cardSurface()
+            }
+            sourceCoverage(result)
+            ForEach(result.results) { job in DiscoveryRoleCard(job: job) }
+        }
+    }
+    private func sourceCoverage(_ result: DiscoveryResponse) -> some View {
+        DisclosureGroup("Source coverage · \(result.sources.count) boards") {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Only the configured employer boards below—not the whole job market.").font(.caption)
+                ForEach(Array(result.sources.enumerated()), id: \.offset) { _, source in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(source.source).font(.subheadline.weight(.semibold))
+                        Text(source.status == "error" ? "Unavailable" : source.status == "partial" ? "Partial" : "Checked").font(.subheadline)
+                        Text("\(source.cached ? "Cached snapshot" : "Checked for this search") · retrieved \(discoveryDate(source.fetchedAt)) · checked \(discoveryDate(source.checkedAt))").font(.caption)
+                        Text("\(source.receivedCount) received · \(source.returnedCount) usable · \(source.droppedCount) malformed · \(source.unlistedCount) unlisted · \(source.duplicateCount) duplicates omitted").font(.caption)
+                        if source.truncated { Text("Source sample or posting text was truncated.").font(.caption) }
+                        if let wait = source.retryAfter, wait > 0 { Text("Wait at least \(wait) seconds before refreshing this source. No automatic retry.").font(.caption) }
+                    }
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 12)
+        }.cardSurface().accessibilityIdentifier("discover.coverage")
+    }
+    private func refresh() async {
+        if segment == "Recommendations" { await store.loadDiscovery(refresh: true) }
+        else { await store.refreshDiscoverySavedRoles() }
+    }
+}
+
+private func discoveryDate(_ value: String?) -> String {
+    guard let value else { return "not supplied" }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let fractional = formatter.date(from: value)
+    formatter.formatOptions = [.withInternetDateTime]
+    guard let date = fractional ?? formatter.date(from: value) else { return "not supplied" }
+    return date.formatted(date: .abbreviated, time: .shortened)
+}
+
+private struct DiscoveryRoleCard: View {
+    @EnvironmentObject private var store: AppStore
+    let job: DiscoveryJob
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Eligibility unknown · review required", systemImage: "info.circle").font(.caption.weight(.medium))
+            Text(job.title).font(.title3.weight(.semibold))
+            Text(job.companyNameIsBoardIdentifier == true ? "Board label: \(job.companyName) (employer name not verified)" : job.companyName).font(.subheadline)
+            Text("\(job.locationText ?? "Location not supplied") · \(job.workplaceType == "unknown" ? "Workplace unknown" : job.workplaceType.capitalized)").font(.subheadline).foregroundStyle(Pursuit.muted)
+            if let relevance = job.relevance {
+                Text("Profile relevance: \(relevance.score.formatted(.number.precision(.fractionLength(0...1)))) / 100 points").font(.subheadline.weight(.semibold))
+                Text("Rule-based relevance, not an AI percentage or hiring probability. Eligibility is not verified.").font(.caption).foregroundStyle(Pursuit.muted)
+                ForEach(Array(relevance.reasons.enumerated()), id: \.offset) { _, reason in Text(reason).font(.subheadline) }
+                if !relevance.gaps.isEmpty {
+                    Text("Gaps to review").font(.subheadline.weight(.medium))
+                    ForEach(Array(relevance.gaps.enumerated()), id: \.offset) { _, gap in Text(gap).font(.subheadline) }
+                }
+                if relevance.reviewRequired { Text("Review the posting against your confirmed facts.").font(.caption) }
+            }
+            Text("Source: \(job.source) · retrieved \(discoveryDate(job.fetchedAt)). A posting may close after retrieval.").font(.caption).foregroundStyle(Pursuit.muted)
+            DisclosureGroup("Posting and provisional reasons") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(job.description).font(.subheadline).textSelection(.enabled)
+                    ForEach(Array(job.matchReasons.enumerated()), id: \.offset) { _, reason in Text(reason).font(.caption) }
+                    Text("Review before applying").font(.subheadline.weight(.medium))
+                    ForEach(Array(job.eligibility.reasons.enumerated()), id: \.offset) { _, reason in Text(reason).font(.caption) }
+                }.padding(.top, 10)
+            }
+            if job.contentTruncated { Text("Posting text is truncated. Review the source and complete the saved description before preparing documents.").font(.caption) }
+            if let url = discoveryListingURL(job.sourceUrl) { Link("View source posting ↗", destination: url).font(.subheadline) }
+            if let saved = store.savedDiscoveryJob(job) {
+                NavigationLink(value: saved) { Label("Open saved role", systemImage: "bookmark.fill") }.accessibilityIdentifier("discover.openSaved")
+            } else if store.uncertainDiscoverySaves.contains(job.sourceUrl) {
+                Text("Save outcome uncertain. Check Saved and refresh that list before saving again.").font(.subheadline)
+            } else {
+                Button { Task { await store.saveDiscoveryRole(job) } } label: {
+                    Label(store.discoverySavingSourceID == job.sourceId ? "Saving role…" : "Save role", systemImage: "bookmark")
+                }.disabled(store.isBusy).accessibilityIdentifier("discover.saveRole")
+            }
+            Text("Saving adds this role to your private workspace. It does not start AI or submit an application.").font(.caption).foregroundStyle(Pursuit.muted)
+        }.cardSurface()
     }
 }
 

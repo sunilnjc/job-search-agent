@@ -421,6 +421,12 @@ class ActualAppBoundaryTests(unittest.TestCase):
         self.addCleanup(settings_patch.stop)
         self.job = self.supabase.job()
         self.resume = self.supabase.resume()
+        self.resume["byte_size"] = len(self.supabase.objects[("resumes", self.resume["storage_path"])])
+        # Preparation now binds a confirmed context and checks source bytes
+        # before reservation. Meet that prerequisite without bypassing either
+        # production readiness or the budget RPC under test.
+        self.supabase.add("candidate_context", USER_A,
+                          career_text="Sample candidate builds reliable software systems.")
 
     def billed_routes(self):
         return (("chat", {"message": "Help me prepare for an interview.", "mode": "interview"}),
@@ -454,10 +460,24 @@ class ActualAppBoundaryTests(unittest.TestCase):
             self.supabase.fault = fault
             for route, body in self.billed_routes():
                 with self.subTest(code=code, route=route):
+                    request_start = len(self.supabase.requests)
                     response = self.client.post("/api/mobile/" + route, json=body)
                     self.assertEqual(response.status_code, expected, response.text)
+                    requests = self.supabase.requests[request_start:]
+                    reservations = [req for req in requests
+                                    if req.url.path == RPC_ROOT + "mobile_reserve_ai_usage"]
+                    self.assertEqual(len(reservations), 1, "Must exercise the real reservation boundary")
+                    self.assertEqual(json.loads(reservations[0].content)["p_operation"], route.rsplit("/", 1)[-1])
+                    if route.endswith("/prepare"):
+                        paths = [req.url.path for req in requests]
+                        self.assertLess(paths.index(RPC_ROOT + "mobile_packet_context"),
+                                        paths.index(RPC_ROOT + "mobile_bind_packet_context"))
+                        self.assertLess(paths.index(RPC_ROOT + "mobile_bind_packet_context"),
+                                        paths.index(RPC_ROOT + "mobile_reserve_ai_usage"))
                     self.assert_no_provider()
+        self.assertEqual(len(self.supabase.tables["model_runs"]), 9)
         self.assertTrue(all(run["status"] == "failed" for run in self.supabase.tables["model_runs"]))
+        self.assertEqual(self.supabase.tables["artifacts"], [])
 
     def test_private_gate_stays_before_entitlement_rpc(self):
         with patch.dict(os.environ, {"MOBILE_ALLOWED_EMAILS": "different@example.test"}):

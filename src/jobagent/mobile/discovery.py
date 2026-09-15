@@ -28,6 +28,12 @@ from uuid import UUID
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
+from .discovery_catalog import (COVERAGE_DISCLAIMER, DEFAULT_PUBLIC_BOARDS, MAX_CATALOG_BOARDS,
+                                REVIEWED_PUBLIC_CATALOG, select_public_boards)
+from .discovery_relevance import (METHOD, discovery_interests, is_open_role_title, is_role_query, matches_titles,
+                                  profile_evidence, relevance)
+from .evidence import INSTRUCTIONS
+
 MAX_BOARDS = 8
 MAX_FEED_BYTES = 2 * 1024 * 1024
 MAX_BOARD_JOBS = 300
@@ -71,6 +77,14 @@ class DiscoverySearchRequest(_Input):
     limit: int = Field(20, ge=1, le=50)
 
 
+class DiscoveryRules(_Input):
+    # Saved preferences, not request filters: users cannot weaken stored hard
+    # constraints just by changing a query. Defaults preserve legacy review.
+    remote_country_policy: Literal["review", "require_explicit"] = "review"
+    remote_country_codes: list[Annotated[str, StringConstraints(pattern=r"^[A-Z]{2}$")]] = Field(default_factory=list, max_length=30)
+    sponsorship_policy: Literal["review", "require_explicit"] = "review"
+
+
 class _Preferences(_Input):
     # Stored rows can outlive the current write schema. Do not reuse the narrower
     # public request-filter bound for their independent compatibility contract.
@@ -79,6 +93,7 @@ class _Preferences(_Input):
     preferred_regions: list[_StoredPreferenceTerm] = Field(default_factory=list, max_length=30)
     remote_preference: Literal["remote_only", "hybrid", "onsite", "open"] = "open"
     sponsorship_required: Optional[bool] = None
+    discovery_rules: DiscoveryRules = Field(default_factory=DiscoveryRules)
 
 
 def _unique_object(pairs: list) -> dict:
@@ -119,17 +134,32 @@ class Board:
 @dataclass(frozen=True)
 class DiscoveryConfig:
     boards: tuple[Board, ...] = ()
+    use_reviewed_catalog: bool = False
 
     def __post_init__(self):
-        if (not isinstance(self.boards, tuple) or len(self.boards) > MAX_BOARDS
+        if (type(self.use_reviewed_catalog) is not bool or not isinstance(self.boards, tuple) or len(self.boards) > MAX_BOARDS
                 or any(not isinstance(board, Board) for board in self.boards)
                 or len(set(self.boards)) != len(self.boards)):
             raise DiscoveryError("invalid_configuration", 503, "Discovery board configuration is invalid.")
+        if self.use_reviewed_catalog:
+            available = self.available_boards
+            if (not self.boards or not set(self.boards) <= set(available)
+                    or len(available) > MAX_CATALOG_BOARDS or len(set(available)) != len(available)):
+                raise DiscoveryError("invalid_configuration", 503, "Discovery board configuration is invalid.")
+
+    @property
+    def available_boards(self) -> tuple[Board, ...]:
+        return tuple(Board(provider, name) for provider, name, _, _ in REVIEWED_PUBLIC_CATALOG) if self.use_reviewed_catalog else self.boards
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> DiscoveryConfig:
         """Read ONLY the public board allowlist. No dotenv or founder settings."""
-        raw = (os.environ if environ is None else environ).get(_ENV_KEY, "{}")
+        environ = os.environ if environ is None else environ
+        # Only absence opts into the reviewed sample. Explicit {}, empty provider
+        # lists, and invalid configuration must never trigger a silent fallback.
+        if _ENV_KEY not in environ:
+            return cls(tuple(Board(provider, name) for provider, name in DEFAULT_PUBLIC_BOARDS), use_reviewed_catalog=True)
+        raw = environ[_ENV_KEY]
         try:
             if not isinstance(raw, str) or len(raw) > 4096:
                 raise ValueError("Configuration bound")
@@ -361,6 +391,9 @@ _COUNTRY_NAMES = dict(item.split("=", 1) for item in (
     "SG=Singapore;JP=Japan;CN=China;BR=Brazil;MX=Mexico;ZA=South Africa;SA=Saudi Arabia;"
     "QA=Qatar;OM=Oman;KW=Kuwait;BH=Bahrain;TR=Türkiye"
 ).split(";"))
+# ISO country-code acceptance is wider than the finite English-name/region
+# lookup below. Unsupported prose names remain unknown, never fuzzy matches.
+SUPPORTED_REMOTE_COUNTRY_CODES = frozenset("AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW".split())
 
 
 def _geo_key(text: str) -> str:
@@ -369,14 +402,29 @@ def _geo_key(text: str) -> str:
 
 _COUNTRY_ALIASES = {_geo_key(name): code for code, name in _COUNTRY_NAMES.items()}
 _COUNTRY_ALIASES.update({code.casefold(): code for code in _COUNTRY_NAMES})
+_COUNTRY_ALIASES.update({code.casefold(): code for code in SUPPORTED_REMOTE_COUNTRY_CODES})
 _COUNTRY_ALIASES.update({"usa": "US", "u s": "US", "u s a": "US", "united states of america": "US",
     "uae": "AE", "u a e": "AE", "uk": "GB", "u k": "GB", "gbr": "GB", "great britain": "GB",
     "deu": "DE", "deutschland": "DE", "fra": "FR", "can": "CA", "aus": "AU", "ind": "IN",
     "czech republic": "CZ", "russia": "RU", "vatican city": "VA", "turkey": "TR"})
+# In free-form location prose these ISO codes also identify US states. Parse
+# them exactly in country metadata, or require a spelled-out country name;
+# 'Remote CA/DE/IL' alone must not establish Canada/Germany/Israel residence.
+_AMBIGUOUS_SHORT_COUNTRIES = frozenset("AL AR CA CO DE GA ID IL IN LA MA MD ME MN MO MS MT NE PA SC SD TN VA".split())
 _COUNTRY_MATCHERS = tuple((re.compile(r"(?<!\w)" + re.escape(alias if len(alias) > 3 else alias.upper()) + r"(?!\w)"),
-    code, len(alias) > 3) for alias, code in _COUNTRY_ALIASES.items())
+    code, len(alias) > 3) for alias, code in _COUNTRY_ALIASES.items()
+    if not (len(alias) == 2 and code in _AMBIGUOUS_SHORT_COUNTRIES))
 _REGIONS = {"europe": _EUROPE, "eu": _EU, "european union": _EU}
 _OPEN_REGIONS = {"anywhere", "worldwide", "global", "world"}
+_CITY_COUNTRIES = {
+    "dubai": "AE", "abu dhabi": "AE", "sharjah": "AE",
+    "berlin": "DE", "hamburg": "DE", "munich": "DE", "münchen": "DE",
+    "madrid": "ES", "barcelona": "ES", "lisbon": "PT", "riga": "LV", "tallinn": "EE",
+    "new york": "US", "san francisco": "US", "chicago": "US", "pittsburgh": "US",
+    "seattle": "US", "boston": "US", "fresno": "US", "san jose": "US",
+}
+_US_STATES = "AL AK AZ AR CA CO CT DE FL GA HI IA ID IL IN KS KY LA MA MD ME MI MN MO MS MT NC ND NE NH NJ NM NV NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI WV WY DC".split()
+_US_CITY_STATE = re.compile(r"\b(?:" + "|".join(re.escape(city) for city, country in _CITY_COUNTRIES.items() if country == "US") + r")[, ]+(?:" + "|".join(_US_STATES) + r")\b", re.I)
 
 
 def _region_codes(term: str) -> Optional[frozenset]:
@@ -391,7 +439,11 @@ def _region_codes(term: str) -> Optional[frozenset]:
 
 def _country_mentions(text: str) -> set[str]:
     key = _geo_key(text)
-    cased_key = " ".join(re.findall(r"\w+", unicodedata.normalize("NFKC", text)))
+    # Do not read Chicago, IL as Israel or Pittsburgh, PA as Panama. Exact
+    # country metadata 'IL' still means Israel; this strips only known US
+    # city/state pairs in longer text. Ambiguous geography remains reviewable.
+    cleaned = _US_CITY_STATE.sub(lambda match: re.sub(r"[, ]+[A-Za-z]{2}$", "", match.group()), text)
+    cased_key = " ".join(re.findall(r"\w+", unicodedata.normalize("NFKC", cleaned)))
     exact = _COUNTRY_ALIASES.get(key.removeprefix("the "))
     found = {exact} if exact else set()
     for pattern, code, casefold in _COUNTRY_MATCHERS:
@@ -424,8 +476,10 @@ def _posting_countries(job: dict) -> set[str]:
         found.add(explicit)
     # Known city -> country only. A Dubai-specific filter still requires Dubai,
     # rather than incorrectly broadening to every city in the UAE.
-    if _matches(["Dubai", "Abu Dhabi", "Sharjah"], location):
-        found.add("AE")
+    if not explicit:
+        for city, code in _CITY_COUNTRIES.items():
+            if _matches([city], location):
+                found.add(code)
     return found
 
 
@@ -456,16 +510,23 @@ def _location_group(terms: list[str], job: dict, countries: set[str]) -> Optiona
 def _filter_reason(job: dict, preferences: _Preferences, request: DiscoverySearchRequest) -> Optional[list[str]]:
     title = job["title"]
     # OR within a preference group; AND between saved preferences and new filters.
-    # Literal/token matching is profession-neutral, not an inferred skill score.
+    # Role queries are title-scoped so description keyword stuffing cannot turn
+    # a project manager into a backend engineer. General keywords remain broad.
     groups = [(preferences.target_titles, title, "Matches stored target title."),
-              (request.filters.titles, title, "Matches requested title filter."),
-              ([request.query] if request.query else [], title + " " + job["department"] + " " + job["description"], "Matches query words.")]
+              (request.filters.titles, title, "Matches requested title filter.")]
     reasons = []
     for terms, text, reason in groups:
-        if not _matches(terms, text):
+        if not matches_titles(terms, text):
             return None
         if terms:
             reasons.append(reason)
+    if request.query:
+        role_query = is_role_query(request.query)
+        matched = matches_titles([request.query], title) if role_query else _matches(
+            [request.query], title + " " + job["department"] + " " + job["description"])
+        if not matched:
+            return None
+        reasons.append("Matches query role in the posting title." if role_query else "Matches query words.")
     countries = _posting_countries(job)
     for terms in (preferences.preferred_locations + preferences.preferred_regions, request.filters.locations):
         reason = _location_group(terms, job, countries)
@@ -500,6 +561,114 @@ def _eligibility(job: dict, preferences: _Preferences) -> dict:
         reasons.append("Posting text was truncated; inspect the source for complete requirements.")
     return {"status": "unknown", "provisional": True, "review_required": True,
             "independently_verified": False, "reasons": reasons}
+
+
+def _scoped_countries(text: str) -> set[str]:
+    codes = _country_mentions(text)
+    for region, members in _REGIONS.items():
+        if re.search(r"(?<!\w)" + re.escape(region) + r"(?!\w)", _geo_key(text)):
+            codes.update(members)
+    return codes
+
+
+def _remote_scope(job: dict) -> dict:
+    """Explicit posting evidence, never candidate residence or inferred rights.
+
+    Scoped residence clauses take precedence over worldwide marketing text.
+    Unrecognized restrictions fail closed in strict mode. This deliberately
+    cannot resolve arbitrary geography, timezones, state licences or citizenship.
+    """
+    if job["workplace_type"] not in {"remote", "hybrid"}:
+        return {"status": "not_remote", "country_codes": [], "excluded_country_codes": []}
+    text = job["location_text"] + "\n" + job["description"]
+    text = re.sub(r"\bU\.S\.(?:A\.)?", "US", text, flags=re.I)
+    clauses = re.split(r"[\n.!?;]+", text)
+    restricted, excluded, unresolved, worldwide = set(), set(), False, False
+    for clause in clauses:
+        if INSTRUCTIONS.search(clause):
+            unresolved = True
+            continue
+        for match in re.finditer(r"\b(?:except|excluding|outside|not (?:available|offered|supported) in)\s+(.{1,100})", clause, re.I):
+            # Only job-workplace/residence context, not 'experience outside US'.
+            if re.search(r"remote|work from|resid|based|located|hiring", clause, re.I):
+                codes = _scoped_countries(match.group(1))
+                excluded.update(codes)
+                unresolved |= not bool(codes)
+        for pattern in (
+            r"\bremote\s+(?:only\s+)?(?:from|within|in|across)\s+(.{1,100})",
+            r"\bremote\s+(.{1,100}?)\s+only\b",
+            r"\b(?:must|required to)\s+(?:reside|live|be (?:based|located|resident))\s+in\s+(.{1,100})",
+            r"\b(?:only|exclusively)\s+(?:hire|hiring|available|open to candidates)\s+(?:remotely\s+)?(?:in|from)\s+(.{1,100})",
+        ):
+            for match in re.finditer(pattern, clause, re.I):
+                wording = match.group(1)
+                if re.search(r"\b(?:outside|except|excluding|not)\b", wording, re.I):
+                    unresolved = True
+                    continue
+                codes = _scoped_countries(wording)
+                if re.search(r"\b(?:anywhere in the world|worldwide|globally)\b", wording, re.I):
+                    worldwide = True
+                elif codes:
+                    restricted.update(codes)
+                else:
+                    unresolved = True
+        if not re.search(r"\b(?:not|no|never|may|might)\b", clause, re.I) and re.search(
+            r"\b(?:worldwide[ -]+remote|remote[ -]+worldwide|work (?:remotely )?from anywhere in the world|remote (?:role|work|position) (?:is )?(?:available|open) worldwide)\b", clause, re.I):
+            worldwide = True
+    # Recognize explicit location labels such as 'Remote - Europe'. Do not scan
+    # arbitrary description mentions (headquarters/benefits) for positive scope.
+    location_codes = _scoped_countries(job["location_text"])
+    country = _COUNTRY_ALIASES.get(_geo_key(job["country"] or ""))
+    if not restricted and country and location_codes and country not in location_codes:
+        unresolved = True  # Conflicting posting metadata needs review, not a guess.
+    codes = restricted or location_codes or ({country} if country else set())
+    status = "unknown" if unresolved else "countries" if restricted or location_codes else "worldwide" if worldwide else "countries" if codes else "unknown"
+    return {"status": status, "country_codes": sorted(codes if status == "countries" else []),
+            "excluded_country_codes": sorted(excluded)}
+
+
+def _sponsorship_signal(job: dict) -> str:
+    positive, negative, conditional = False, False, False
+    for clause in re.split(r"[\n.!?;]+", job["description"]):
+        if not re.search(r"sponsor|visa|work permit|authori[sz]", clause, re.I) or INSTRUCTIONS.search(clause):
+            continue
+        negative |= bool(re.search(
+            r"\b(?:no|without)\s+(?:(?:visa|immigration|work permit)\s+)?sponsorship\b|\b(?:cannot|can't|do not|does not|don't|will not|won't|unable to|not able to)\s+(?:offer |provide |support )?(?:(?:visa|immigration|work permit) )?sponsor|\bsponsorship\s+(?:is\s+)?(?:not available|not offered|unavailable)|\bmust\s+(?:already\s+)?(?:be\s+)?authori[sz]ed to work", clause, re.I))
+        offered = bool(re.search(
+            r"\b(?:visa|immigration|work permit)\s+sponsorship\s+(?:is\s+)?(?:available|provided|offered|supported)|\b(?:offer|provide|support|provides|offers)\s+(?:visa|immigration|work permit)\s+sponsorship|\b(?:will|can)\s+sponsor\s+(?:a\s+)?(?:work\s+)?visas?\b", clause, re.I))
+        uncertain = bool(re.search(r"\b(?:may|might|possibly|potentially|conditional|eligible|certain|qualifying|depending|depends|case.by.case|not|no|without|cannot|can't|won't|unable)\b", clause, re.I))
+        positive |= offered and not uncertain
+        conditional |= offered and uncertain
+    return "conflicting" if negative and positive else "restricted" if negative else "offered" if positive and not conditional else "conditional" if conditional else "unknown"
+
+
+def _constraint_checks(job: dict, prefs: _Preferences) -> dict:
+    rules = prefs.discovery_rules
+    remote, sponsorship = _remote_scope(job), _sponsorship_signal(job)
+    wanted = set(rules.remote_country_codes)
+    excluded_by, notes = [], []
+    if remote["status"] != "not_remote":
+        explicit_match = ((remote["status"] == "worldwide" and (bool(wanted) or not remote["excluded_country_codes"]))
+                          or remote["status"] == "countries" and bool(wanted & set(remote["country_codes"])))
+        # At least one requested country must be supported, not merely be absent
+        # from the posting. A listing that only excludes a country is not global.
+        if wanted and remote["status"] == "worldwide":
+            explicit_match &= bool(wanted - set(remote["excluded_country_codes"]))
+        elif wanted:
+            explicit_match &= bool((wanted & set(remote["country_codes"])) - set(remote["excluded_country_codes"]))
+        if rules.remote_country_policy == "require_explicit" and (not explicit_match or job["content_truncated"]):
+            excluded_by.append("remote_country")
+        notes.append("Remote scope is posting wording only; residence, state/timezone limits and work rights remain unverified.")
+        if remote["status"] == "unknown":
+            notes.append("Remote country evidence is unknown or contains unresolved restrictions; not worldwide eligibility.")
+        if wanted and not explicit_match:
+            notes.append("Posting does not explicitly establish a remote location within your selected countries.")
+    if prefs.sponsorship_required is True:
+        if rules.sponsorship_policy == "require_explicit" and (sponsorship != "offered" or job["content_truncated"]):
+            excluded_by.append("sponsorship")
+        notes.append("Sponsorship wording: " + sponsorship + ". An offer of sponsorship does not prove personal visa or job eligibility.")
+    return {"remote": remote, "sponsorship": sponsorship, "excluded_by": excluded_by,
+            "reasons": notes, "eligibility_verified": False}
 
 
 class _Limiter:
@@ -546,7 +715,7 @@ class DiscoveryService:
                  clock: Callable = time.monotonic):
         self.config, self._transport, self._clock = config, transport, clock
         self._cache = {}
-        self._locks = {board: asyncio.Lock() for board in config.boards}
+        self._locks = {board: asyncio.Lock() for board in config.available_boards}
         self._network_slots = asyncio.Semaphore(3)
         self._tenants, self._global = _Limiter(clock, 2048), _Limiter(clock, 4)
         self._active, self._active_lock = 0, threading.Lock()
@@ -621,7 +790,7 @@ class DiscoveryService:
                 self._cache[board] = (self._clock() + ttl, jobs, source)
                 return jobs, {**source, "cached": False}
 
-    async def search(self, *, user_id: str, preferences: Optional[dict], request) -> dict:
+    async def search(self, *, user_id: str, preferences: Optional[dict], request, profile: Optional[dict] = None) -> dict:
         try:
             if not isinstance(user_id, str) or str(UUID(user_id)) != user_id:
                 raise ValueError("Invalid identity")
@@ -629,22 +798,41 @@ class DiscoveryService:
             raise DiscoveryError("invalid_identity", 401, "A verified user identity is required.") from None
         if preferences is not None and (not isinstance(preferences, dict) or preferences.get("user_id") != user_id):
             raise DiscoveryError("preference_owner_mismatch", 403, "Preferences must belong to the authenticated user.")
+        if profile is not None and (not isinstance(profile, dict) or profile.get("user_id") != user_id):
+            raise DiscoveryError("profile_owner_mismatch", 403, "Profile must belong to the authenticated user.")
         try:
             request = DiscoverySearchRequest.model_validate(request.model_dump() if isinstance(request, DiscoverySearchRequest) else request)
             # Ignore all other stored columns, especially authorization notes and
             # timestamps. Never expose user_id or a preference object in results.
             prefs = _Preferences.model_validate({key: value for key, value in (preferences or {}).items() if key in _Preferences.model_fields})
-        except ValidationError:
+            if (any(code not in SUPPORTED_REMOTE_COUNTRY_CODES for code in prefs.discovery_rules.remote_country_codes)
+                    or prefs.discovery_rules.sponsorship_policy == "require_explicit" and prefs.sponsorship_required is not True):
+                raise ValueError("Unsupported or contradictory discovery rules")
+        except (ValidationError, ValueError):
             raise DiscoveryError("invalid_request", 422, "Discovery query or preferences exceed the supported bounds.") from None
+        try:
+            evidence = profile_evidence(profile)
+        except (ValueError, TypeError, RecursionError):
+            raise DiscoveryError("invalid_profile", 422, "Saved career profile exceeds the supported bounds or is invalid.") from None
         if not self.config.boards:
             raise DiscoveryError("not_configured", 503, "No public discovery boards are configured.")
+        boards = self.config.boards
+        if self.config.use_reviewed_catalog:
+            targets = request.filters.titles or prefs.target_titles
+            if not targets and is_role_query(request.query):
+                targets = [request.query]
+            interests = discovery_interests(targets, profession=evidence.profession, level=evidence.level)
+            countries = frozenset(code for term in prefs.preferred_regions + prefs.preferred_locations + request.filters.locations
+                                  for code in (_region_codes(term) or ())) | frozenset(prefs.discovery_rules.remote_country_codes)
+            boards = tuple(Board(provider, name) for provider, name in select_public_boards(
+                interests=interests, countries=countries, limit=MAX_BOARDS))
         if not self._tenants.take(hashlib.sha256(user_id.encode()).hexdigest(), 6) or not self._global.take("search", 60):
             raise DiscoveryError("rate_limited", 429, "Discovery search limit reached. Retry later.", 60)
         with self._active_lock:
             if self._active >= 8:
                 raise DiscoveryError("busy", 503, "Discovery is busy. Retry later.", 5)
             self._active += 1
-        tasks = {asyncio.create_task(self._board(board)): board for board in self.config.boards}
+        tasks = {asyncio.create_task(self._board(board)): board for board in boards}
         try:
             done, pending = await asyncio.wait(tasks, timeout=SEARCH_TIMEOUT_SECONDS)
             for task in pending:
@@ -655,23 +843,42 @@ class DiscoveryService:
             snapshots.extend((tasks[task], self._failure(tasks[task], _FeedFailure("deadline_exceeded"))) for task in pending)
             sources, selected = [], {}
             warnings = []
+            exclusions = {"remote_country": 0, "sponsorship": 0}
+            non_vacancy_count = 0
             if any(_region_codes(term) is None for term in prefs.preferred_regions):
                 warnings.append("Some saved regions have no supported country map; only literal location text can match them. Use Europe, EU, a supported country, or an explicit location.")
             for board, (jobs, source) in sorted(snapshots, key=lambda pair: pair[0].key):
-                sources.append({**source, "cached": source.get("cached", False)})
+                source_result = {**source, "cached": source.get("cached", False), "matched_count": 0}
+                sources.append(source_result)
                 for job in jobs:
+                    if not is_open_role_title(job["title"]):
+                        non_vacancy_count += 1
+                        continue
                     if (prefs.preferred_regions or prefs.preferred_locations or request.filters.locations) and not _posting_countries(job):
                         warning = "Some postings have unconfirmed geography. Remote/hybrid results are provisional review candidates, not confirmed regional or worldwide matches."
                         if warning not in warnings:
                             warnings.append(warning)
                     reasons = _filter_reason(job, prefs, request)
                     if reasons is not None:
+                        checks = _constraint_checks(job, prefs)
+                        if checks["excluded_by"]:
+                            for key in checks["excluded_by"]:
+                                exclusions[key] += 1
+                            continue
+                        source_result["matched_count"] += 1
                         # Build new containers; never attach tenant annotations to
                         # cached public records or share a mutable result object.
                         selected[job["source_id"]] = {**job, "match_reasons": reasons,
-                            "eligibility_status": "unknown", "eligibility": _eligibility(job, prefs), "persisted": False}
+                            "eligibility_status": "unknown", "eligibility": _eligibility(job, prefs), "persisted": False,
+                            "relevance": relevance(job, evidence, target_titles=prefs.target_titles),
+                            "constraint_review": checks}
+            for key, count in exclusions.items():
+                if count:
+                    warnings.append(f"{count} title/location-filtered posting(s) excluded by your strict {key.replace('_', ' ')} rule; missing evidence was not treated as eligibility.")
             results, size = [], 0
-            for job in sorted(selected.values(), key=lambda item: (item["title"].casefold(), item["source_id"]))[:request.limit]:
+            for job in sorted(selected.values(), key=lambda item: (
+                    -item["relevance"]["score"] if evidence.available else 0,
+                    item["title"].casefold(), item["source_id"]))[:request.limit]:
                 item_size = len(json.dumps(job, ensure_ascii=False).encode("utf-8"))
                 if size + item_size > MAX_RESULTS_BYTES - 32_768:
                     break
@@ -684,7 +891,13 @@ class DiscoveryService:
                 "results": results, "sources": sources, "partial": partial, "truncated": truncated,
                 "matched_count": len(selected), "returned_count": len(results), "searched_at": _now(),
                 "warnings": warnings,
-                "persisted": False, "ranking": "literal_preferences_then_title", "eligibility_verified": False}
+                "persisted": False, "ranking": METHOD if evidence.available else "literal_preferences_then_title", "eligibility_verified": False,
+                "coverage": {"scope": "limited_public_boards", "board_count": len(boards),
+                    "max_boards": MAX_BOARDS, "disclaimer": COVERAGE_DISCLAIMER,
+                    "selection": "profession_catalog_v1" if self.config.use_reviewed_catalog else "operator_allowlist",
+                    "catalog_board_count": len(self.config.available_boards),
+                    "non_vacancy_count": non_vacancy_count,
+                    "strict_excluded_count": exclusions}}
         finally:
             for task in tasks:
                 if not task.done():

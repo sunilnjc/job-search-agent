@@ -159,6 +159,14 @@ class CredentialRankingTests(OfflineCase):
         with patch.object(studio, "_provider", return_value=StubProvider(rank_output(context, []))):
             self.assertEqual(studio.rank_job(context)["recommendation"], "review")
 
+    def test_omitted_mandatory_requirement_question_shows_the_actual_requirement(self):
+        context = context_for("marketing")
+        _, facts = studio._context(context)
+        review, questions, _ = professions.credential_review([], facts, professions.CareerBackground())
+        self.assertTrue(review)
+        self.assertTrue(any("Campaign analysis and stakeholder communication are required" in question for question in questions))
+        self.assertFalse(any("posting source [" in question for question in questions))
+
     def test_omitted_and_overlong_job_segments_never_produce_all_clear(self):
         for description in ("\n".join(["Coordinate routine work."] * 101 + ["A licence is required."]),
                             "Coordinate " + "routine work " * 160 + "for the team."):
@@ -231,7 +239,7 @@ class CredentialRankingTests(OfflineCase):
         self.assertEqual(result["recommendation"], "review")
         self.assertIn("not been evaluated", result["rationale"])
 
-    def test_unsupported_requirement_refs_names_strength_and_candidate_refs_rejected(self):
+    def test_invalid_rubrics_stay_rejected_but_ranking_returns_unresolved_review(self):
         context = context_for("nursing")
         for change in ("source", "invented_text", "name", "generic_name", "strength", "candidate", "fake_skill"):
             req = requirement_for(context)
@@ -249,10 +257,16 @@ class CredentialRankingTests(OfflineCase):
                 req["candidate_source_ids"] = ["job.requirements.0"]
             else:
                 req.update(category="transferable_skill", credential_name="", jurisdiction="")
-            with self.subTest(change=change), patch.object(studio, "_provider", return_value=StubProvider(rank_output(context, [req]))):
-                with self.assertRaises(studio.MissingFactsError) as error:
-                    studio.rank_job(context)
-            self.assertTrue(error.exception.questions)
+            with self.subTest(change=change):
+                _, facts = studio._context(context)
+                with self.assertRaises(professions.RubricError):
+                    professions.validate_rubric([professions.RequirementAssessment.model_validate(req)], facts)
+                with patch.object(studio, "_provider", return_value=StubProvider(rank_output(context, [req]))):
+                    result = studio.rank_job(context)
+                self.assertEqual(result["recommendation"], "review")
+                self.assertEqual(result.model_metadata["rubric_reason_code"], "rubric_contract_invalid")
+                self.assertIn("Current RN licence in Ontario is required", " ".join(result.questions))
+                self.assertNotIn("Literal credential match is supported", result["rationale"])
 
     def test_noncredential_supported_comparison_downgrades_without_losing_ranking(self):
         context = context_for("marketing")

@@ -70,7 +70,7 @@ class SupabaseSettings:
 COLUMNS = {
     "profiles": "user_id,display_name,phone,base_location,timezone,onboarding_completed_at,created_at,updated_at",
     "candidate_context": "user_id,career_text,career_background",
-    "job_preferences": "user_id,target_titles,preferred_locations,preferred_regions,remote_preference,sponsorship_required,work_authorization_notes,minimum_match_score,created_at,updated_at",
+    "job_preferences": "user_id,target_titles,preferred_locations,preferred_regions,remote_preference,sponsorship_required,work_authorization_notes,minimum_match_score,discovery_rules,created_at,updated_at",
     "jobs": "id,user_id,source,source_job_id,source_url,company_name,title,location_text,workplace_type,employment_type,description,eligibility_status,status,exclusion_reason,published_at,last_validated_at,created_at,updated_at",
     "resumes": "id,user_id,label,role_focus,storage_path,original_filename,mime_type,byte_size,is_default,created_at,updated_at",
     "mobile_resume_operations": "id,user_id,state,resume_data,content_sha256,created_at,updated_at",

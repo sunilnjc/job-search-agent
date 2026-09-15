@@ -6,6 +6,7 @@ No app/founder imports, real network, candidate files, or database required.
 from __future__ import annotations
 
 import asyncio
+import copy
 import importlib.util
 import json
 import os
@@ -88,9 +89,157 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
     def make_service(self, boards=(BOARD_G, BOARD_L, BOARD_A)):
         return d.DiscoveryService(d.DiscoveryConfig(tuple(boards)), transport=httpx.MockTransport(self.feeds), clock=lambda: self.now)
 
-    async def search(self, request=None, prefs=None, user=USER_A, service=None):
+    async def search(self, request=None, prefs=None, user=USER_A, service=None, profile=None):
         return await (service or self.service).search(user_id=user,
-            preferences=preferences(user) if prefs is None else prefs, request={} if request is None else request)
+            preferences=preferences(user) if prefs is None else prefs, request={} if request is None else request,
+            profile=profile)
+
+    def career_profile(self, user=USER_A, profession="Backend Engineer", level="senior", **changes):
+        return {"user_id": user, "career_background": {"profession": profession, "experience_level": level},
+                "career_text": "Built Python SQL services.", **changes}
+
+    async def test_profile_relevance_sorts_before_limit_not_alphabetically(self):
+        self.feeds.payloads["boards-api.greenhouse.io"] = {"jobs": [
+            greenhouse(id=1, title="Account Manager", content="Senior Backend Engineer Python SQL " * 100),
+            greenhouse(id=2, title="Junior Backend Engineer", content="Python SQL services."),
+            greenhouse(id=3, title="Senior Software Engineer, Backend", content="Python SQL services.")]}
+        result = await self.search({"limit": 1}, service=self.make_service((BOARD_G,)), profile=self.career_profile())
+        self.assertEqual(result["ranking"], "profile_rules_v1")
+        self.assertEqual(result["matched_count"], 3)
+        self.assertEqual(result["results"][0]["title"], "Senior Software Engineer, Backend")
+        row = result["results"][0]
+        self.assertGreater(row["relevance"]["score"], 0)
+        self.assertLessEqual(row["relevance"]["score"], 100)
+        self.assertTrue(row["relevance"]["review_required"])
+        self.assertEqual(row["eligibility_status"], "unknown")
+        self.assertTrue(row["eligibility"]["provisional"])
+
+    async def test_profile_is_optional_and_legacy_search_keywords_keep_working(self):
+        legacy = await self.service.search(user_id=USER_A, preferences=None, request={})
+        empty = await self.search(profile={"user_id": USER_A, "career_text": None, "career_background": {}})
+        imported = await self.search(profile={"user_id": USER_A, "resume_text": "Senior Backend Engineer",
+            "ai_summary": "Senior Backend Engineer", "display_name": "Synthetic Candidate"})
+        for result in (legacy, empty, imported):
+            self.assertEqual(result["ranking"], "literal_preferences_then_title")
+            self.assertEqual([r["title"] for r in result["results"]], sorted(r["title"] for r in result["results"]))
+            self.assertTrue(all(r["relevance"]["score"] == 0 for r in result["results"]))
+
+    async def test_profile_owner_and_career_bounds_checked_before_network(self):
+        for supplied in ({"user_id": USER_B}, {}, [], "private"):
+            with self.subTest(profile_type=type(supplied).__name__), self.assertRaises(d.DiscoveryError) as caught:
+                await self.search(profile=supplied)
+            self.assertEqual((caught.exception.code, caught.exception.status_code), ("profile_owner_mismatch", 403))
+        for changes in ({"career_text": "x" * 100001}, {"career_background": []},
+                        {"career_background": {"experience_level": "PRIVATE_INVALID_LEVEL"}}):
+            with self.subTest(keys=list(changes)), self.assertRaises(d.DiscoveryError) as caught:
+                await self.search(profile=self.career_profile(**changes))
+            self.assertEqual((caught.exception.code, caught.exception.status_code), ("invalid_profile", 422))
+            self.assertNotIn("PRIVATE_INVALID_LEVEL", str(caught.exception))
+        self.assertEqual(self.feeds.requests, [])
+
+    async def test_title_and_role_query_aliases_cannot_match_keyword_stuffed_descriptions(self):
+        self.feeds.payloads["boards-api.greenhouse.io"] = {"jobs": [
+            greenhouse(id=1, title="Senior Software Engineer, Backend", content="Python SQL services."),
+            greenhouse(id=2, title="Junior Backend Engineer", content="Senior backend engineer works here. Python."),
+            greenhouse(id=3, title="Product Manager", content="Senior backend engineer Python " * 100)]}
+        service = self.make_service((BOARD_G,))
+        for body, prefs in (({"query": "Senior Backend Engineer"}, preferences()),
+                            ({"filters": {"titles": ["Senior Backend Engineer"]}}, preferences()),
+                            ({}, preferences(target_titles=["Senior Backend Engineer"]))):
+            with self.subTest(body=body):
+                result = await self.search(body, prefs, service=service, profile=self.career_profile())
+                self.assertEqual([r["title"] for r in result["results"]], ["Senior Software Engineer, Backend"])
+        # Non-role keyword searches remain intentionally broad.
+        self.assertEqual((await self.search({"query": "Python"}, service=service))["returned_count"], 3)
+        conflict = await self.search({"filters": {"titles": ["Junior Backend Engineer"]}},
+            preferences(target_titles=["Senior Backend Engineer"]), service=service, profile=self.career_profile())
+        self.assertEqual(conflict["returned_count"], 0)
+
+    async def test_career_change_does_not_erase_hard_target_or_seniority(self):
+        self.feeds.payloads["boards-api.greenhouse.io"] = {"jobs": [
+            greenhouse(id=1, title="Primary School Teacher", content="Teach students."),
+            greenhouse(id=2, title="Junior Backend Engineer", content="Build services."),
+            greenhouse(id=3, title="Senior Backend Engineer", content="Build services.")]}
+        service = self.make_service((BOARD_G,))
+        career = self.career_profile(profession="Teacher", level="career_change", career_text="Taught mathematics.")
+        result = await self.search(prefs=preferences(target_titles=["Senior Backend Engineer"]), service=service, profile=career)
+        self.assertEqual([r["title"] for r in result["results"]], ["Senior Backend Engineer"])
+        self.assertIn("not established", " ".join(result["results"][0]["relevance"]["gaps"]))
+        broad = await self.search(prefs=preferences(target_titles=["Backend Engineer"]), service=service, profile=career)
+        self.assertEqual([r["title"] for r in broad["results"]], ["Junior Backend Engineer", "Senior Backend Engineer"])
+
+    async def test_profile_never_relaxes_geography_workplace_or_work_rights(self):
+        self.feeds.payloads["api.ashbyhq.com"] = {"jobs": [
+            ashby(title="Senior Backend Engineer", descriptionPlain="Python services. Must reside in US. No sponsorship."),
+            ashby(title="Junior Backend Engineer", jobUrl="https://jobs.ashbyhq.com/synthetic-labs/de-role",
+                  descriptionPlain="Python services. No sponsorship.")]}
+        career = self.career_profile(base_location="US", work_authorization_notes="Authorized everywhere")
+        result = await self.search(prefs=preferences(preferred_regions=["Europe"], sponsorship_required=True),
+            service=self.make_service((BOARD_A,)), profile=career)
+        self.assertEqual([r["title"] for r in result["results"]], ["Junior Backend Engineer"])
+        self.assertIn("conflict", " ".join(result["results"][0]["eligibility"]["reasons"]))
+        self.assertEqual(result["results"][0]["eligibility_status"], "unknown")
+        conflict = await self.search({"filters": {"workplace_type": "onsite"}},
+            preferences(remote_preference="remote_only"), profile=career)
+        self.assertEqual(conflict["returned_count"], 0)
+
+    async def test_profile_does_not_silently_remove_unknown_geography_warning(self):
+        self.feeds.payloads["api.ashbyhq.com"] = {"jobs": [ashby(title="Senior Backend Engineer", location="Remote", address={})]}
+        result = await self.search(prefs=preferences(preferred_regions=["Europe"]),
+            service=self.make_service((BOARD_A,)), profile=self.career_profile(base_location="Germany"))
+        self.assertEqual(result["status"], "partial")
+        self.assertIn("unconfirmed geography", " ".join(result["warnings"]))
+        self.assertTrue(result["results"][0]["eligibility"]["review_required"])
+
+    async def test_profile_relevance_is_tenant_local_not_cached_mutated_or_sent_upstream(self):
+        career_a = self.career_profile(profession="Nurse", career_text="Clinical practice. PRIVATE_CAREER_SENTINEL",
+                                       display_name="PRIVATE_NAME_SENTINEL", email="private@example.test")
+        career_b = self.career_profile(user=USER_B, profession="Teacher", career_text="Teaching learners.")
+        before = copy.deepcopy((career_a, career_b))
+        first = await self.search(profile=career_a)
+        second = await self.search(user=USER_B, profile=career_b)
+        self.assertEqual(first["results"][0]["title"], "Registered Nurse")
+        self.assertEqual(second["results"][0]["title"], "Primary School Teacher")
+        self.assertEqual((career_a, career_b), before)
+        self.assertEqual(len(self.feeds.requests), 3)
+        first["results"][0]["relevance"]["reasons"].append("MUTATED_PRIVATE_SENTINEL")
+        third = await self.search(profile=career_a)
+        self.assertNotIn("MUTATED_PRIVATE_SENTINEL", json.dumps(third))
+        self.assertNotIn("relevance", str(self.service._cache))
+        for marker in ("PRIVATE_CAREER_SENTINEL", "PRIVATE_NAME_SENTINEL", "private@example.test"):
+            self.assertNotIn(marker, json.dumps(third))
+            self.assertNotIn(marker, str(self.service._cache))
+            for req in self.feeds.requests:
+                self.assertNotIn(marker, str(req.url) + str(req.headers) + req.content.decode())
+
+    async def test_catalog_default_fetches_only_eight_fixed_public_adapters_offline(self):
+        calls = []
+        def public_feed(req):
+            calls.append(req)
+            if req.url.host == "boards-api.greenhouse.io":
+                return response({"jobs": [greenhouse()]})
+            if req.url.host == "api.lever.co":
+                return response([lever()])
+            board = req.url.path.rsplit("/", 1)[-1]
+            return response({"jobs": [ashby(jobUrl=f"https://jobs.ashbyhq.com/{board}/a2-b3")]})
+        config = d.DiscoveryConfig.from_env({})
+        service = d.DiscoveryService(config, transport=httpx.MockTransport(public_feed))
+        result = await self.search(service=service)
+        self.assertEqual(len(calls), 8)
+        self.assertEqual(result["returned_count"], 8)
+        self.assertEqual(result["coverage"]["board_count"], 8)
+        self.assertEqual(result["coverage"]["scope"], "limited_public_boards")
+        self.assertIn("not the whole job market", result["coverage"]["disclaimer"])
+        self.assertTrue(all(req.method == "GET" and not req.content for req in calls))
+
+    async def test_coverage_disclaimer_survives_zero_matches_and_all_sources_unavailable(self):
+        empty = await self.search({"query": "NO_MATCH_SENTINEL"})
+        self.assertEqual(empty["returned_count"], 0)
+        self.assertIn("no results does not mean no jobs", empty["coverage"]["disclaimer"])
+        self.feeds.fault = lambda _: response(status=503)
+        unavailable = await self.search(service=self.make_service())
+        self.assertEqual(unavailable["status"], "unavailable")
+        self.assertEqual(unavailable["coverage"], empty["coverage"])
 
     async def test_three_real_adapters_normalize_profession_neutral_feeds(self):
         result = await self.search()
@@ -617,9 +766,29 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DiscoveryConfigTests(unittest.TestCase):
-    def test_empty_config_has_no_default_employer_or_founder_fallback(self):
-        self.assertEqual(d.DiscoveryConfig.from_env({}).boards, ())
-        self.assertEqual(d.DiscoveryConfig.from_env({"ATS_BOARDS": "private"}).boards, ())
+    def test_missing_environment_uses_reviewed_catalog_never_founder_configuration(self):
+        expected = tuple(d.Board(provider, name) for provider, name in d.DEFAULT_PUBLIC_BOARDS)
+        self.assertEqual(d.DiscoveryConfig.from_env({}).boards, expected)
+        self.assertEqual(d.DiscoveryConfig.from_env({"ATS_BOARDS": "private"}).boards, expected)
+        self.assertEqual(len(expected), 8)
+        self.assertEqual(len(set(expected)), len(expected))
+
+    def test_explicit_empty_is_disabled_and_operator_boards_replace_not_append_catalog(self):
+        for raw in ("{}", '{"greenhouse":[],"lever":[],"ashby":[]}'):
+            self.assertEqual(d.DiscoveryConfig.from_env({"MOBILE_DISCOVERY_BOARDS": raw}).boards, ())
+        self.assertEqual(d.DiscoveryConfig().boards, ())
+        self.assertEqual(d.DiscoveryConfig.from_env({"MOBILE_DISCOVERY_BOARDS": '{"lever":["school"]}'}).boards,
+                         (d.Board("lever", "school"),))
+        for raw in ("", " ", "null", None):
+            with self.subTest(raw=raw), self.assertRaises(d.DiscoveryError):
+                d.DiscoveryConfig.from_env({"MOBILE_DISCOVERY_BOARDS": raw})
+
+    def test_catalog_cannot_bypass_existing_max_boards(self):
+        with patch.object(d, "DEFAULT_PUBLIC_BOARDS", tuple(("lever", f"board-{i}") for i in range(9))):
+            with self.assertRaises(d.DiscoveryError):
+                d.DiscoveryConfig.from_env({})
+        with patch.object(d, "MAX_BOARDS", 4), self.assertRaises(d.DiscoveryError):
+            d.DiscoveryConfig.from_env({})
 
     def test_valid_public_board_identifiers_only(self):
         config = d.DiscoveryConfig.from_env({"MOBILE_DISCOVERY_BOARDS": '{"greenhouse":["clinic-1"],"lever":["school_1"],"ashby":["factory"]}'})

@@ -18,6 +18,8 @@ import { loadMobileWorkspace, mobileRequest } from "./mobile";
 import { clearDraft, draftStorage } from "./onboardingDraft";
 import { AccountPanel } from "./AccountPanel";
 import { DiscoveryPanel } from "./DiscoveryPanel";
+import { discoveryContextKey } from "./discovery";
+import type { DiscoverySnapshot } from "./discovery";
 import { BillingPanel } from "./BillingPanel";
 import "./beta.css";
 import "./pursuit-theme.css";
@@ -86,6 +88,7 @@ function SignedInWorkspace({ session, initialPrivacy = false }: { session: Sessi
   const [preferences, setPreferences] = useState<JobPreferences | null>(null);
   const [jobs, setJobs] = useState<BetaJob[]>([]);
   const [applications, setApplications] = useState<BetaApplication[]>([]);
+  const [discoverySnapshot, setDiscoverySnapshot] = useState<DiscoverySnapshot | null>(null);
   const [studioJob, setStudioJob] = useState<BetaJob | null>(null);
   const [detailJob, setDetailJob] = useState<BetaJob | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -130,6 +133,7 @@ function SignedInWorkspace({ session, initialPrivacy = false }: { session: Sessi
     } catch { setError("Could not sign out. Check your connection and try again."); }
   };
   const groups = useMemo(() => groupRoles(jobs), [jobs]);
+  const unavailableReadinessCount = applications.filter(row => row.readiness_unavailable === "packet_check_failed").length;
   const closeStudio = () => { setStudioJob(null); void loadWorkspace(); };
   // Privacy is auth-only and intentionally rendered before workspace/plan/onboarding gates.
   if (privacyOpen) return <main className="beta-shell"><AccountPanel session={session} onBack={() => { setPrivacyOpen(false); setLoaded(false); void loadWorkspace(); }} /></main>;
@@ -139,7 +143,8 @@ function SignedInWorkspace({ session, initialPrivacy = false }: { session: Sessi
   if (!profile?.onboarding_completed_at || !preferences) {
     return <div><button className="beta-text-button" onClick={() => void signOut()}>Sign out and clear this tab’s draft</button><button className="beta-text-button" onClick={() => setPrivacyOpen(true)}>Account privacy</button><OnboardingWizard session={session} profile={profile} preferences={preferences} onComplete={async () => {
       if (!await loadWorkspace()) throw new Error("Your changes were saved, but the workspace could not refresh. Please reconnect.");
-      setNotice("Your workspace is ready.");
+      setView("discover");
+      setNotice("Your workspace is ready. Finding roles using your saved preferences; no AI credits are used for this search.");
     }} /></div>;
   }
 
@@ -152,12 +157,13 @@ function SignedInWorkspace({ session, initialPrivacy = false }: { session: Sessi
       </header>
       {notice && <p className="beta-notice" role="status">{notice}</p>}
       {error && <p className="beta-error" role="alert">{error}</p>}
+      {unavailableReadinessCount > 0 && <div className="beta-notice" role="alert"><p>Readiness could not be verified for {unavailableReadinessCount} saved role{unavailableReadinessCount === 1 ? "" : "s"}. These roles are not marked Ready. Your profile, saved roles and documents remain available. Wait a moment, then retry; this check does not run AI or submit applications.</p><button className="beta-secondary" disabled={loading} onClick={() => void loadWorkspace()}>{loading ? "Checking readiness…" : "Retry readiness checks"}</button></div>}
       {(jobs.length === 200 || applications.length === 200) && <p className="beta-notice">Showing up to 200 recently updated records per list. Older records are not included in these counts.</p>}
       <div id="pursuit-workspace" tabIndex={-1}>
       {view === "today" && <TodayHome profile={profile} jobs={jobs} applications={applications} onNavigate={setView} onOpenJob={setDetailJob} />}
-      {view === "discover" && <Today readyJobs={groups.ready} needsReview={groups.review} allJobs={jobs} userId={session.user.id} preferences={preferences} onEditPreferences={() => setEditing(true)} onViewApplications={() => setView("tracker")} onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} onJobsChanged={async () => { if (!await loadWorkspace()) throw new Error("Saved roles could not refresh. The completed save was not undone."); }} />}
+      {view === "discover" && <Today key={discoveryContextKey(session.user.id, profile, preferences)} profile={profile} snapshot={discoverySnapshot} onSnapshot={setDiscoverySnapshot} onReviewResume={() => setView("studio")} readyJobs={groups.ready} needsReview={groups.review} allJobs={jobs} userId={session.user.id} preferences={preferences} onEditPreferences={() => setEditing(true)} onViewApplications={() => setView("tracker")} onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} onJobsChanged={async () => { if (!await loadWorkspace()) throw new Error("Saved roles could not refresh. The completed save was not undone."); }} />}
       {view === "tracker" && <section className="beta-content"><ApplicationsWorkspace jobs={jobs} applications={applications} onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} /></section>}
-      {view === "studio" && <section className="beta-content"><header className="pursuit-page-heading"><p className="beta-eyebrow">Studio</p><h1>Your experience, in focus.</h1><p>A private home for your source resumes and application materials.</p></header><DocumentsPanel session={session} onChanged={async () => { await loadWorkspace(); }} /><div className="pursuit-note"><h2>Build on what’s true</h2><p>Confirm your career facts, add a full job description and open a role below to assess fit, answer questions and prepare draft documents. AI actions require your choice; you review and apply externally yourself.</p><button className="beta-text-button" onClick={() => setView("profile")}>Review your profile →</button></div><JobSection title="Choose a role to prepare" jobs={activeRoles(jobs)} empty="Save a role in Discover to open its application workspace." onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} /></section>}
+      {view === "studio" && <section className="beta-content"><header className="pursuit-page-heading"><p className="beta-eyebrow">Studio</p><h1>Your experience, in focus.</h1><p>A private home for your source resumes and application materials.</p></header><DocumentsPanel session={session} onDiscover={() => setView("discover")} onChanged={async () => { await loadWorkspace(); }} /><div className="pursuit-note"><h2>Build on what’s true</h2><p>Confirm your career facts, then find suitable roles in Discover. Open a saved role to assess fit, answer questions and prepare documents. You review and apply externally yourself.</p><button className="beta-text-button" onClick={() => setView("profile")}>Review your profile →</button></div><JobSection title="Choose a role to prepare" jobs={activeRoles(jobs)} empty="Save a role in Discover to open its application workspace." onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} /></section>}
       {view === "profile" && <><ProfileSummary profile={profile} preferences={preferences} onEdit={() => setEditing(true)} onDocuments={() => setView("studio")} /><section className="beta-content"><div className="pursuit-note"><h2>Your account privacy</h2><p>Request a data export or account erasure and check its status. These controls are separate from workspace subscriptions.</p><button className="beta-secondary" onClick={() => setPrivacyOpen(true)}>Account privacy</button></div><div className="pursuit-note"><h2>Operator billing tests</h2><p>Check service-reported test billing and, when configured, open a Stripe test checkout or portal. This is not a live subscription offer.</p><button className="beta-secondary" onClick={() => setBillingOpen(true)}>Billing test mode</button></div></section></>}
       </div>
       <nav className="beta-navigation" aria-label="Primary navigation">
@@ -175,9 +181,9 @@ function BetaSetupNeeded() {
   return <main className="beta-shell beta-center"><p className="beta-eyebrow">THE JOB PURSUIT · BETA</p><h1>Private beta setup is in progress.</h1><p>This environment is intentionally separate from the founder’s personal dashboard. Configure the public Supabase URL and anonymous key to enable it.</p></main>;
 }
 
-function Today({ readyJobs, needsReview, allJobs, userId, preferences, onEditPreferences, onViewApplications, onOpenStudio, onOpenDetail, onJobsChanged }: { readyJobs: BetaJob[]; needsReview: BetaJob[]; allJobs: BetaJob[]; userId: string; preferences: JobPreferences; onEditPreferences: () => void; onViewApplications: () => void; onOpenStudio: (job: BetaJob) => void; onOpenDetail: (job: BetaJob) => void; onJobsChanged: () => Promise<void> }) {
+function Today({ readyJobs, needsReview, allJobs, userId, profile, snapshot, onSnapshot, onReviewResume, preferences, onEditPreferences, onViewApplications, onOpenStudio, onOpenDetail, onJobsChanged }: { readyJobs: BetaJob[]; needsReview: BetaJob[]; allJobs: BetaJob[]; userId: string; profile: BetaProfile; snapshot: DiscoverySnapshot | null; onSnapshot: (snapshot: DiscoverySnapshot) => void; onReviewResume: () => void; preferences: JobPreferences; onEditPreferences: () => void; onViewApplications: () => void; onOpenStudio: (job: BetaJob) => void; onOpenDetail: (job: BetaJob) => void; onJobsChanged: () => Promise<void> }) {
   const [adding, setAdding] = useState(false);
-  const [finding, setFinding] = useState(false);
+  const [finding, setFinding] = useState(true);
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<"all" | "ready" | "review">("all");
   const matchesQuery = (job: BetaJob) => `${job.title} ${job.company_name} ${job.location_text ?? ""}`.toLowerCase().includes(query.trim().toLowerCase());
@@ -190,7 +196,7 @@ function Today({ readyJobs, needsReview, allJobs, userId, preferences, onEditPre
       ? `${readyJobs.length} role${readyJobs.length === 1 ? "" : "s"} ready for review`
       : "Your shortlist is clear";
 
-  if (finding) return <section className="beta-content"><header className="pursuit-page-heading"><p className="beta-eyebrow">Discover</p><h1>Find roles on public boards.</h1><p>Review source coverage and choose which postings to save.</p></header><div className="discovery-view-toggle"><button className="beta-secondary" onClick={() => setFinding(false)}>Back to saved roles</button></div><DiscoveryPanel userId={userId} preferences={preferences} savedJobs={allJobs} onSaved={onJobsChanged} onOpenStudio={onOpenStudio} onEditPreferences={onEditPreferences} /></section>;
+  if (finding) return <section className="beta-content"><header className="pursuit-page-heading"><p className="beta-eyebrow">Discover</p><h1>Roles for your next move.</h1><p>Based on your saved preferences and career facts. Choose a role to explore, then prepare an application.</p></header><div className="discovery-view-toggle"><button className="beta-secondary" onClick={() => setFinding(false)}>Saved roles ({activeRoles(allJobs).length})</button><button className="beta-text-button" onClick={() => { setFinding(false); setAdding(true); }}>Add a job link</button></div><DiscoveryPanel userId={userId} profile={profile} snapshot={snapshot} onSnapshot={onSnapshot} onReviewResume={onReviewResume} preferences={preferences} savedJobs={allJobs} onSaved={onJobsChanged} onOpenStudio={onOpenStudio} onEditPreferences={onEditPreferences} /></section>;
 
   return (
     <section className="beta-content">

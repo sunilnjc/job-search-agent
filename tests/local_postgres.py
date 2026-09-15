@@ -8,12 +8,39 @@ after this cluster is stopped. Reusable by other focused migration tests.
 """
 from __future__ import annotations
 
+import atexit
 import os
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+
+# Only instances constructed by this process are registered. Never scan /tmp,
+# signal a name/PID from process listings, or touch a pre-existing database.
+_ACTIVE_CLUSTERS = set()
+
+
+def cleanup_owned_clusters():
+    """Best effort on interpreter exit; failed shutdown keeps the owned data."""
+    for cluster in tuple(_ACTIVE_CLUSTERS):
+        try:
+            cluster.close()
+        except BaseException:
+            print("Disposable PostgreSQL cleanup failed; owned directory retained", file=sys.stderr)
+
+
+atexit.register(cleanup_owned_clusters)
+
+
+def _version_key(directory):
+    # Debian/Ubuntu place server binaries outside PATH. Pick 17 before 9, not
+    # lexicographic order, while explicit configuration remains first choice.
+    name = directory.parent.name
+    return tuple(int(part) for part in name.split('.') if part.isdigit())
 
 
 def postgres_bin() -> Path:
@@ -24,6 +51,9 @@ def postgres_bin() -> Path:
     executable = shutil.which("postgres")
     if executable:
         candidates.append(Path(executable).resolve().parent)
+    for base in (Path("/usr/lib/postgresql"), Path("/usr/pgsql")):
+        if base.is_dir():
+            candidates.extend(sorted(base.glob("*/bin"), key=_version_key, reverse=True))
     for cellar in (Path("/usr/local/Cellar"), Path("/opt/homebrew/Cellar")):
         if cellar.is_dir():
             candidates.extend(sorted(cellar.glob("postgresql*/*/bin"), reverse=True))
@@ -45,13 +75,19 @@ class DisposablePostgres:
         self.root = Path(tempfile.mkdtemp(prefix="jp-sql-", dir="/tmp"))
         self.data = self.root / "data"
         self.sock = self.root / "socket"
-        self.sock.mkdir(mode=0o700)
         self.running = False
-        self.env = {"PATH": str(self.bin) + ":/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C"}
+        self.command_cleanup_failed = False
+        self.env = {"PATH": str(self.bin) + ":/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C",
+                    "PGPASSFILE": os.devnull, "PGSERVICEFILE": os.devnull}
+        _ACTIVE_CLUSTERS.add(self)
         try:
+            self.sock.mkdir(mode=0o700)
             self._run("initdb", "-D", str(self.data), "-U", "fixture_admin", "-A", "trust", "--no-locale", "--encoding=UTF8")
             self._run("pg_ctl", "-D", str(self.data), "-l", str(self.root / "postgres.log"),
-                      "-o", "-h '' -k " + str(self.sock) + " -p 55432", "-w", "-t", "15", "start")
+                      "-o", "-h '' -k " + str(self.sock) + " -p 55432"
+                      " -c shared_buffers=16MB -c max_connections=20"
+                      " -c max_parallel_workers=2 -c max_parallel_workers_per_gather=0"
+                      " -c autovacuum=off", "-w", "-t", "15", "start")
             self.running = True
         except BaseException:
             # pg_ctl may time out just after startup. Only target our own data
@@ -63,12 +99,30 @@ class DisposablePostgres:
 
     def _run(self, command, *args, sql=None):
         executable = self.psql if command == "psql" else self.bin / command
-        result = subprocess.run([str(executable), *args], input=sql, text=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                env=self.env, timeout=30, check=False)
-        if result.returncode:
-            raise AssertionError("Disposable PostgreSQL " + command + " failed:\n" + result.stderr)
-        return result.stdout
+        # initdb launches a bootstrap postgres child. subprocess.run(timeout=)
+        # only kills its direct child; a timed-out bootstrap could otherwise
+        # outlive initdb. The new session belongs exclusively to this command.
+        process = subprocess.Popen([str(executable), *args], text=True,
+                                   stdin=subprocess.PIPE if sql is not None else subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   env=self.env, start_new_session=True)
+        try:
+            stdout, stderr = process.communicate(input=sql, timeout=30)
+        except BaseException:
+            try:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.communicate(timeout=5)
+            except BaseException:
+                # Never remove data under an unconfirmed live command. A
+                # detached pg_ctl postmaster is separately stopped via -D.
+                self.command_cleanup_failed = True
+            raise
+        if process.returncode:
+            raise AssertionError("Disposable PostgreSQL " + command + " failed:\n" + stderr)
+        return stdout
 
     def execute(self, sql: str) -> str:
         if not self.running:
@@ -80,10 +134,13 @@ class DisposablePostgres:
         if self.running:
             self._run("pg_ctl", "-D", str(self.data), "-m", "fast", "-w", "-t", "15", "stop")
             self.running = False
+        if self.command_cleanup_failed:
+            raise RuntimeError("Disposable PostgreSQL command cleanup unconfirmed; owned directory retained")
         # No automatic TemporaryDirectory finalizer: if shutdown fails, preserve
         # the owned directory rather than removing a possibly running cluster.
         if self.root.exists():
             shutil.rmtree(self.root)
+        _ACTIVE_CLUSTERS.discard(self)
 
 
 SUPABASE_TEST_SCHEMAS = r"""

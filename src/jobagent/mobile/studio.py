@@ -37,14 +37,17 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .exports import Block, clean_text, render_docx, render_pdf, safe_link
 from .selections import materialize_selection, selection_schema
+from .writing import compose_letter, connection_options, document_terms, quality_flags
 from .professions import (
     RequirementAssessment, RubricError, background_from_context,
-    credential_review, effective_status, job_segments, literal_in, qualification_fact, validate_rubric,
+    credential_review, credential_text, effective_status, job_segments, literal_in, qualification_fact, validate_rubric,
+    requirement_importance,
+    recalled_requirement_sources, rejected_rubric_questions,
 )
 
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_TEXT_CHARS = 100_000
-PROMPT_VERSION = "mobile-studio-v4-evidence-selection"
+PROMPT_VERSION = "mobile-studio-v6-source-composition"
 _metadata: ContextVar[dict] = ContextVar("mobile_studio_model_metadata", default={})
 
 
@@ -82,10 +85,14 @@ class StudioResult(dict):
 
 
 class StudioDocuments(list):
-    def __init__(self, values, *, model_metadata=None, questions=None):
+    def __init__(self, values, *, model_metadata=None, questions=None, review=None, composition=None):
         super().__init__(values)
         self._model_metadata = dict(model_metadata or {})
         self.questions = list(questions or [])
+        # Additive diagnostic contract; old list callers and provider stubs stay
+        # compatible. This is draft review information, not a quality score.
+        self.review = dict(review or {})
+        self.composition = dict(composition or {})
 
     @property
     def model_metadata(self) -> dict:
@@ -349,6 +356,13 @@ def _context(context: dict) -> tuple[dict, list[dict]]:
                                 "job_id": str(job.get("id") or ""),
                                 "profession_label": profession, "experience_level": background.experience_level},
                "confirmed_answers": confirmed_answers,
+               # Same literal classifier as validation, exposed before selection
+               # so e.g. "a high degree of autonomy" is not guessed to be a
+               # university degree. These hints confer no candidate support.
+               "requirement_contract": [{"source_id": fact["id"],
+                    "credential_wording": credential_text(fact["text"]),
+                    "importance": requirement_importance(fact["text"])}
+                   for fact in facts if fact["id"].startswith("job.requirements.") and claim_allowed(fact)],
                "job_text_requires_review": (bool(_INSTRUCTIONS.search(clean_text(description)))
                                             or len(job_segments(description)) >= 100
                                             or any(len(segment) > 1600 for segment in job_segments(description)))}
@@ -434,6 +448,38 @@ server. For documents use candidate facts only. Prefer experience/achievement
 facts for the resume and cover letter and copy actual skills into the skills
 section. Select concise relevant facts, not all facts; resume at most 650 words,
 cover letter at most 220 words. Do not omit required experience.
+For documents, consult document_evidence_hints: these are conservative source
+section and literal-overlap cues, not proof of fit. Prefer a few substantive
+examples covering distinct duties in the actual posting over repeated keywords,
+generic motivation, bare titles or a list of every skill. Do not select identity
+or heading-only facts as body copy. Respect source section boundaries: projects,
+education, training and qualifications are not employment. Keep employer, role
+and date context when it is explicitly supplied; never infer which employer an
+unattached achievement belongs to. Use summary only for a genuine concise overview,
+not duplicate detailed facts. A student's project stays a project even if it is
+highly relevant. Select cover-letter examples that demonstrate different relevant
+contributions; do not simply reuse the first resume lines for every company.
+An overlap cue does not negate a limitation in the same fact. Never remove a
+negative statement or turn an unheld skill into experience. If the available facts
+cannot support a duty, leave it out of candidate claims and return the appropriate
+follow-up question/rubric assessment. Do not silently rewrite spelling, dates,
+metrics or repeated keywords; those require the user's confirmed correction.
+Document composition plan: the server can add first-person grammar to action
+fragments and place exact job quotations beside selected evidence. Do not write
+your own prose or splice source text. document_connection_options identifies
+literal topic connections only, not evidence that a requirement is satisfied.
+Choose 2-4 distinct substantive cover-letter examples when available: one about
+the actual job's work, one about a supported result or scope, and an additional
+different contribution when useful. Avoid bare employment headings, keyword
+lists and generic motivation as letter paragraphs. Prefer examples demonstrating
+what the candidate did over education unless learning/projects are their relevant
+evidence. Do not pad a thin profile or repeat the same result in different fields.
+Facts marked quality_flags must not become body copy. Repeated keywords or generic
+motivation need the user's correction; standalone_role_headline is context, not an
+achievement. Do not select or silently rewrite these facts. Keep the resume's explicit employer/date history and
+relevant education, even when these are not good cover-letter examples. Preserve
+useful results beyond literal job keywords. If too little evidence is available,
+return the career/metrics question rather than inventing a fuller narrative.
 Use the actual job title and description for tailoring and interview/application
 coaching, for any profession. Do not assume software engineering, coding or system
 design unless the role or explicit request calls for it. The role_context and
@@ -453,7 +499,11 @@ For rank and documents, return a bounded requirements rubric. Every requirement 
 job.requirements source id. Its complete text and importance are inserted by the
 server; do not output text or importance fields. Distinguish licence,
 certification, education, transferable_skill, experience and other criteria. Use
-required only for explicit must/required/mandatory/essential/prerequisite/shall
+requirement_contract for the server's literal wording classification: when
+credential_wording is false, use transferable_skill, experience or other and keep
+credential_name/jurisdiction empty. A degree of autonomy, freedom or responsibility
+is not an academic degree. A rubric topic is not automatically a mandatory gate.
+Use required only for explicit must/required/mandatory/essential/prerequisite/shall
 wording; preferred for optional/preferred/desired wording or a negated requirement;
 otherwise unknown. Mixed required/preferred wording is unknown. Do not change
 negations or alternatives. credential_name and jurisdiction must occur literally
@@ -686,11 +736,23 @@ def _pending_questions(questions: list[str], payload: dict) -> list[str]:
     return result[:8]
 
 
-def _review_credentials(output, payload: dict, facts: list[dict], context: dict):
+def _review_credentials(output, payload: dict, facts: list[dict], context: dict, *, review_id: str | None = None):
     try:
         validate_rubric(output.requirements, facts)
     except RubricError:
-        raise MissingFactsError(["Can you confirm the job's actual requirements and the corresponding qualification evidence?"]) from None
+        # Candidate claims were independently validated before this point. A bad
+        # comparison must not discard a truthful draft, nor bless any criterion
+        # from a partially checked rubric. Recall gates only from original facts.
+        rejected_count = len(output.requirements)
+        output.requirements = []
+        recalled = recalled_requirement_sources([], facts)
+        _metadata.set({**get_model_metadata(), "rubric_reason_code": "rubric_contract_invalid",
+                       "rubric_rejected_count": rejected_count,
+                       "rubric_unresolved_requirement_count": len(recalled)})
+        return True, rejected_rubric_questions(
+            facts, review_id or str(uuid4()), suspicious_job=payload["job_text_requires_review"]), [
+                "The model requirement comparison was discarded because it could not be validated. "
+                "No requirement is treated as supported by that comparison; review the original posting."]
     return credential_review(output.requirements, facts, background_from_context(context),
                              suspicious_job=payload["job_text_requires_review"])
 
@@ -822,6 +884,219 @@ def _identity(context: dict) -> list[Block]:
     return blocks
 
 
+_DOCUMENT_HEADINGS = {
+    "summary": "summary", "professional summary": "summary", "profile": "summary",
+    "experience": "experience", "work experience": "experience",
+    "professional experience": "experience", "employment": "experience",
+    "employment history": "experience", "career history": "experience",
+    "education": "education", "education and training": "education", "training": "education",
+    "skills": "skills", "technical skills": "skills", "core skills": "skills",
+    "projects": "projects", "personal projects": "projects", "academic projects": "projects",
+    "selected projects": "projects", "certifications": "qualifications",
+    "qualifications": "qualifications", "licenses": "qualifications", "licences": "qualifications",
+    "languages": "languages", "volunteering": "volunteering", "volunteer experience": "volunteering",
+}
+_DOCUMENT_DEGREE = re.compile(
+    r"^(?:education\s*:|(?:b\.?sc\.?|m\.?sc\.?|b\.?a\.?|m\.?a\.?|bcom|beng|meng|mba|ph\.?d\.?|"
+    r"bachelor(?:'s)?|master(?:'s)?|doctorate|diploma|associate degree)\s)", re.I)
+_DOCUMENT_PROJECT = re.compile(
+    r"^(?:(?:(?:personal|academic|university|student|bootcamp|capstone|independent)\s+)?projects?\s*[:\-]|"
+    r"capstone(?: project)?\s*[:\-]|(?:built|created|developed)\s+(?:a |an |my )?"
+    r"(?:personal|academic|student|coursework|bootcamp)\s+(?:[\w-]+\s+){0,4}"
+    r"(?:project|prototype|dashboard|app|application|website|tool)\b)", re.I)
+_DOCUMENT_TRAINING = re.compile(
+    r"^(?:completed|attended|studied|enrolled in)\b.{0,180}\b(?:bootcamp|course|training programme|training program|degree|diploma)\b", re.I)
+_DOCUMENT_QUALIFICATION = re.compile(
+    r"^(?:(?:certifications?|qualifications?|licen[cs]es?|credentials?)\s*:|"
+    r"[^.!?]{0,100}\b(?:licen[cs]e|certification|registration)\s+(?:is\s+)?"
+    r"(?:self[- ]reported\s+)?(?:current|expired|in[_ -]progress|not[_ -]held|unknown|pending)\b)", re.I)
+_EMPLOYMENT_LINE = re.compile(r"^[^,\n]{2,160},\s*(?P<company>[^,\n]{2,160}),\s*[^\n]{0,30}\b(?:19|20)\d{2}\b")
+_DOCUMENT_ACTION_START = re.compile(
+    r"^(?:I\b|At\b|Built|Created|Developed|Reduced|Led|Prioritized|Analyzed|Analysed|Coordinated|"
+    r"Owned|Shortened|Evaluated|Designed|Investigated|Prepared|Maintained|Organized|Organised|"
+    r"Helped|Used|Completed|Delivered|Implemented|Improved|Supported|Managed|Automated|Tested|"
+    r"Documented|Resolved|Migrated|Launched|Conducted|Collaborated|Contributed|Increased|"
+    r"Saved|Trained|Worked|Targeting)\b", re.I)
+_BARE_ROLE_ENDING = re.compile(
+    r"\b(?:engineer|developer|manager|analyst|accountant|nurse|designer|scientist|architect|"
+    r"consultant|director|specialist|technician|officer|coordinator|researcher|executive|"
+    r"administrator|lead|intern|teacher|therapist|pharmacist)\s*\.?$", re.I)
+
+
+def _employment_match(text: str):
+    # Accomplishments can also contain two commas followed by a year. Their
+    # comma-separated technology names must not be mistaken for employers.
+    return None if _DOCUMENT_ACTION_START.match(text) else _EMPLOYMENT_LINE.match(text)
+
+
+def _standalone_role_headline(text: str, ref: str, context: dict) -> bool:
+    if (len(text) > 140 or len(text.split()) > 10 or re.search(r"[\d,;:!?]", text)
+            or _DOCUMENT_ACTION_START.match(text)):
+        return False
+    normalized = clean_text(text).casefold().rstrip(".")
+    profile, preferences, job = (context.get(name) or {} for name in ("profile", "preferences", "job"))
+    titles = [profile.get("headline"), job.get("title")]
+    targets = preferences.get("target_titles")
+    if isinstance(targets, list):
+        titles.extend(value for value in targets if isinstance(value, str))
+    explicit_label = any(isinstance(value, str) and normalized == clean_text(value).casefold().rstrip(".") for value in titles)
+    # General role-name recognition is limited to an explicit headline field or
+    # the first career-text line. Later standalone lines require a known title.
+    return explicit_label or bool((ref == "career_text.0" or ref == "profile.headline") and _BARE_ROLE_ENDING.search(text))
+
+
+def _document_evidence_hints(facts: list[dict], context: dict) -> dict[str, dict]:
+    """Only explicit source structure; no inferred employer or credential claims.
+
+    Literal overlap helps the selector find examples, but is never a fit score or
+    a substitute for the existing qualification/negation/claim validators.
+    """
+    job = context.get("job") or {}
+    title_terms = document_terms(str(job.get("title") or ""))
+    job_terms = document_terms(str(job.get("description") or ""))
+    section = ""
+    hints = {}
+    for fact in facts:
+        if not claim_allowed(fact, documents=True):
+            continue
+        ref, text = fact["id"], fact["text"]
+        placed = ""
+        if ref.startswith("profile."):
+            field = ref.split(".", 2)[1]
+            placed = {"summary": "summary", "headline": "summary", "experience": "experience",
+                      "employment": "experience", "education": "education", "skills": "skills",
+                      "projects": "projects", "certifications": "qualifications",
+                      "languages": "languages"}.get(field, "")
+            if field in {"display_name", "full_name", "name", "base_location", "location", "phone",
+                         "email", "linkedin", "github", "portfolio", "website"}:
+                placed = "context_only"
+        elif ref.startswith("career_background.qualifications."):
+            index = int(ref.rsplit(".", 1)[-1])
+            qualification = background_from_context(context).qualifications[index]
+            placed = "education" if qualification.kind == "education" else "qualifications"
+        if ref.startswith("career_text."):
+            heading = _DOCUMENT_HEADINGS.get(text.casefold().rstrip(": "))
+            if heading:
+                section, placed = heading, "heading_only"
+            elif _DOCUMENT_DEGREE.match(text) or _DOCUMENT_TRAINING.match(text):
+                placed = "education"
+            elif _DOCUMENT_PROJECT.match(text):
+                placed = "projects"
+            elif _DOCUMENT_QUALIFICATION.match(text) and not section:
+                # Preserve complete free-text status/negations. Structured
+                # qualification contradictions are still rejected separately.
+                placed = "qualifications"
+            elif re.match(r"^(?:technical |core )?skills\s*:", text, re.I):
+                placed = "skills"
+            elif _employment_match(text):
+                placed = "experience"
+            else:
+                placed = section
+        fact_terms = document_terms(text)
+        flags = quality_flags(text, placed)
+        if placed not in {"education", "projects", "qualifications", "skills", "heading_only", "context_only"} and _standalone_role_headline(text, ref, context):
+            placed = "summary"
+            flags.append("standalone_role_headline")
+        hints[ref] = {"section": placed or "unspecified",
+                      "literal_overlap": len(fact_terms & job_terms) + 2 * len(fact_terms & title_terms),
+                      "word_count": len(text.split()),
+                      "quality_flags": flags,
+                      "employment_header": bool(_employment_match(text))
+                          and placed not in {"education", "projects", "qualifications", "skills"}}
+    # Flat notes do not establish which employer owns an unattached result.
+    # Do not visually assign it to the last employment line.
+    employers = {fact["id"]: match.group("company").strip() for fact in facts
+                 if fact["id"].startswith("career_text.") and fact["id"] in hints
+                 and hints[fact["id"]]["section"] in {"unspecified", "experience"}
+                 and (match := _employment_match(fact["text"]))}
+    if employers:
+        for fact in facts:
+            hint = hints.get(fact["id"])
+            if (hint and fact["id"].startswith("career_text.") and fact["id"] not in employers
+                    and hint["section"] in {"unspecified", "experience"}):
+                # Even one employer heading in flat notes does not prove every
+                # detached result happened there. Explicitly named attributions
+                # remain intact; otherwise use a neutral contributions section.
+                if not any(literal_in(company, fact["text"]) for company in employers.values()):
+                    hint["section"] = "contributions"
+                    hint["employer_attribution_unconfirmed"] = True
+    return hints
+
+
+def _document_sections(output: _DocumentOutput, hints: dict, variant: str, stage: str):
+    sections = {name: [] for name in ("summary", "experience", "contributions", "education", "skills", "projects",
+                                     "qualifications", "languages", "volunteering")}
+    # Prefer a detailed placement over an identical summary. Do not shorten a
+    # paragraph, merge distinct employment facts, or silently rewrite bad source.
+    seen = set()
+    for proposed in ("experience", "education", "skills", "summary"):
+        for claim in getattr(output, proposed):
+            section = hints.get(claim.source_ids[0], {}).get("section", "unspecified")
+            if (section in {"context_only", "heading_only"} or claim.text in seen
+                    or hints.get(claim.source_ids[0], {}).get("quality_flags")):
+                continue
+            placed = proposed if section == "unspecified" else section
+            sections[placed].append(claim)
+            seen.add(claim.text)
+    order = ["summary", "experience", "contributions", "projects", "education", "qualifications", "skills", "languages", "volunteering"]
+    if variant == "career_change":
+        order = ["summary", "skills", "projects", "experience", "contributions", "education", "qualifications", "languages", "volunteering"]
+    elif stage in {"student", "entry"}:
+        order = ["summary", "education", "projects", "experience", "contributions", "qualifications", "skills", "languages", "volunteering"]
+    headings = {"summary": "Professional Summary", "experience": "Work Experience", "education": "Education",
+                "skills": "Skills", "projects": "Projects", "qualifications": "Qualifications",
+                "languages": "Languages", "volunteering": "Volunteer Experience", "contributions": "Selected Career Contributions"}
+    return [(headings[key], sections[key]) for key in order if sections[key]]
+
+
+def _document_writing_questions(facts: list[dict], hints: dict, sections: list, paragraphs: list[dict]) -> list[str]:
+    """Actionable improvements, never padded candidate claims or eligibility clearance."""
+    questions = []
+    flags = {flag for hint in hints.values() for flag in hint.get("quality_flags", [])}
+    if "repeated_keywords_need_confirmation" in flags:
+        questions.append("The skills note repeats keywords and was left out of this draft. Please confirm a concise skills list, keeping any coursework or proficiency limitations.")
+    if "generic_motivation_not_evidence" in flags:
+        questions.append("The general motivation statement was left out. Can you replace it with one confirmed example of what you built, improved or learned, including your own contribution?")
+    selected = {claim.source_ids[0] for _, claims in sections for claim in claims}
+    if any(hints[ref].get("employer_attribution_unconfirmed") for ref in selected):
+        questions.append("Which employer or project does each selected career contribution belong to? Until you confirm this, the resume keeps those contributions separate from employment history.")
+    if not any(paragraph["job_source_id"] for paragraph in paragraphs):
+        questions.append("There is not enough specific overlap to connect your selected examples to the posting safely. Which confirmed task or project best demonstrates the work this role involves?")
+    substantive = [fact for fact in facts if fact["id"] in selected
+                   and not hints[fact["id"]].get("employment_header")
+                   and hints[fact["id"]]["section"] not in {"education", "skills", "qualifications", "languages"}]
+    if len(substantive) < 2 or sum(len(fact["text"].split()) for fact in substantive) < 60:
+        questions.append("This is a short evidence-based draft, not a complete career narrative. Add one relevant example with the problem, your actions and a confirmed outcome; a qualitative outcome is fine if you have no measured result.")
+    return questions
+
+
+def _document_review(facts: list[dict], hints: dict, sections: list, letter_claims: list[_Claim], requirements: list,
+                     generation_id: str, captured_at: str) -> dict:
+    from .document_review import MODE, NOTICE, VERSION, source_snapshot
+    selected = {ref for _, claims in sections for claim in claims for ref in claim.source_ids}
+    selected.update(ref for claim in letter_claims for ref in claim.source_ids)
+    available = [fact["id"] for fact in facts if fact["id"] in hints
+                 and hints[fact["id"]]["section"] not in {"context_only", "heading_only"}]
+    omitted = [ref for ref in available if ref not in selected]
+    snapshot_sources = [fact for fact in facts if fact["id"] in available or (
+        fact["kind"] == "job" and claim_allowed(fact)
+        and (fact["id"].startswith("job.requirements.") or fact["id"] in {
+            "job.title", "job.company_name", "job.location_text", "job.workplace_type", "job.employment_type"}))]
+    snapshot_ids = {fact["id"] for fact in snapshot_sources}
+    return {
+        "version": VERSION, "mode": MODE, "notice": NOTICE,
+        "snapshot": source_snapshot(snapshot_sources, generation_id, captured_at),
+        "resume_sections": {heading: [ref for claim in claims for ref in claim.source_ids] for heading, claims in sections},
+        "cover_letter_source_ids": [ref for claim in letter_claims for ref in claim.source_ids],
+        "omitted_source_ids": omitted,
+        "omitted_with_literal_job_overlap": [ref for ref in omitted if hints[ref]["literal_overlap"] > 0],
+        "unattributed_source_ids": [ref for ref in available if ref in selected and hints[ref].get("employer_attribution_unconfirmed")],
+        "requirements_needing_review": [ref for ref in dict.fromkeys(
+            [ref for item in requirements if item.assessment != "supported" for ref in item.requirement.source_ids]
+            + [fact["id"] for fact in recalled_requirement_sources(requirements, facts)]) if ref in snapshot_ids],
+    }
+
+
 def prepare_documents(context: dict, variant: str = "role_aligned") -> list[dict]:
     _metadata.set({})
     if variant == "general":
@@ -839,51 +1114,78 @@ def prepare_documents(context: dict, variant: str = "role_aligned") -> list[dict
         "sse": "Explicit legacy senior software engineering variant; use only confirmed software experience and do not invent seniority.",
         "fde": "Explicit legacy forward deployed engineering variant; use only confirmed engineering and customer-facing examples.",
     }
-    payload.update(operation="documents", variant=variant, document_strategy=strategies[variant])
+    hints = _document_evidence_hints(facts, context)
+    if not any(hint["section"] not in {"context_only", "heading_only"} for hint in hints.values()):
+        raise MissingFactsError([_QUESTIONS["career"]])
+    payload.update(operation="documents", variant=variant, document_strategy=strategies[variant],
+                   document_evidence_hints=hints, document_connection_options=connection_options(facts, hints))
+    if len(json.dumps(payload, ensure_ascii=False)) > 180_000:
+        raise StudioError("Career context is too large. Select a shorter resume and fewer details.")
     output = _complete(payload, _DocumentOutput)
     claims = output.summary + output.experience + output.education + output.skills + output.cover_letter
-    evidence = _validate_claims(claims, facts, candidate_only=True)
+    _validate_claims(claims, facts, candidate_only=True)
     _validate_export_qualifications(claims, context)
     if any(ref in {"career_background.profession", "career_background.experience_level"}
            for claim in output.experience + output.skills for ref in claim.source_ids):
         raise MissingFactsError([_QUESTIONS["career"], _QUESTIONS["skills"]])
     if not claims or not (output.experience or output.education or output.skills or output.summary):
         raise MissingFactsError([_QUESTIONS["career"]])
-    _, credential_questions, _ = _review_credentials(output, payload, facts, context)
+    version = str(uuid4())
+    _, credential_questions, _ = _review_credentials(output, payload, facts, context, review_id=version)
     resume = list(identity)
-    # Exact evidence selections may repeat the same paragraph in several
-    # sections. Prefer its detailed section, preserving the complete fact once.
-    detailed = {claim.text for claim in output.experience + output.education + output.skills}
-    summary = [claim for claim in output.summary if claim.text not in detailed]
-    sections = [("Professional Summary", summary), ("Work Experience", output.experience),
-                ("Education", output.education), ("Skills", output.skills)]
-    if variant == "career_change":
-        sections = [sections[0], sections[3], sections[1], sections[2]]
-    elif payload["career_background"]["experience_level"] in {"student", "entry"}:
-        sections = [sections[0], sections[2], sections[1], sections[3]]
-    rendered_facts = set()
+    sections = _document_sections(output, hints, variant, payload["career_background"]["experience_level"])
+    if not sections:
+        raise MissingFactsError([_QUESTIONS["career"]])
     for heading, selected in sections:
-        unique = []
-        for claim in selected:
-            if claim.text not in rendered_facts:
-                unique.append(claim)
-                rendered_facts.add(claim.text)
-        selected = unique
-        if selected:
-            resume.append(Block(heading, "heading"))
-            resume.extend(Block(claim.text) for claim in selected)
+        resume.append(Block(heading, "heading"))
+        resume.extend(Block(claim.text) for claim in selected)
     job = context.get("job") or {}
     title = clean_text(str(job.get("title") or ""))
     company = clean_text(str(job.get("company_name") or ""))
     targeted = bool(title and company and len(title) <= 160 and len(company) <= 160
                     and not _INSTRUCTIONS.search(title + " " + company) and not _URL.search(title + " " + company))
-    opening = (f"I am applying for the {title} role at {company}. The experience below is relevant to my application."
-               if targeted else "I am applying for this opportunity. The experience below is relevant to my application.")
+    opening = (f"I am applying for the {title} role at {company}."
+               if targeted else "I am applying for this opportunity.")
     letter = list(identity) + [Block("Cover Letter", "heading"), Block("Dear Hiring Team,"),
                               Block(opening)]
-    letter.extend(Block(text) for text in dict.fromkeys(claim.text for claim in output.cover_letter))
-    letter.extend([Block("Thank you for considering my application."), Block("Sincerely,"), Block(identity[0].text)])
-    version = str(uuid4())
+    letter_claims = []
+    seen = set()
+    for claim in output.cover_letter:
+        hint = hints.get(claim.source_ids[0], {})
+        if (hint.get("section") in {"context_only", "heading_only"} or claim.text in seen
+                or hint.get("quality_flags") or hint.get("employment_header")):
+            continue
+        letter_claims.append(claim)
+        seen.add(claim.text)
+    # A selector can overlook a useful posting connection even when it selected
+    # that evidence for the resume. Recall at most one such already-validated
+    # fact, never new prose or a new source from unconfirmed/profile-only data.
+    connections = connection_options(facts, hints)
+    recalled_letter_ids = []
+    if not any(connections.get(claim.source_ids[0]) for claim in letter_claims):
+        alternatives = [claim for claim in output.experience + output.education + output.skills + output.summary
+                        if claim.text not in seen and connections.get(claim.source_ids[0])]
+        if alternatives:
+            best = max(alternatives, key=lambda claim: len(connections[claim.source_ids[0]][0]["literal_topics"]))
+            if len(letter_claims) == 4:
+                letter_claims.pop()
+            letter_claims.append(best)
+            recalled_letter_ids.append(best.source_ids[0])
+    if not letter_claims:
+        raise MissingFactsError([_QUESTIONS["career"]])
+    paragraphs = compose_letter(letter_claims, facts, hints)
+    # Composition can reorder by posting topic. Keep per-artifact source order
+    # identical to the actual reading order, and preserve the original claims.
+    by_source = {claim.source_ids[0]: claim for claim in letter_claims}
+    letter_claims = [by_source[sentence["source_id"]] for paragraph in paragraphs
+                     for sentence in paragraph["candidate_sentences"]]
+    letter.extend(Block(paragraph["text"]) for paragraph in paragraphs)
+    letter.extend([Block("I would welcome a conversation about these examples and your team's priorities. Thank you for considering my application."),
+                   Block("Sincerely,"), Block(identity[0].text)])
+    evidence_by_kind = {
+        "tailored_resume": list(dict.fromkeys(ref for _, selected in sections for claim in selected for ref in claim.source_ids)),
+        "cover_letter": [ref for claim in letter_claims for ref in claim.source_ids],
+    }
     created = datetime.now(timezone.utc)
     stamp = created.strftime("%Y%m%dT%H%M%S%fZ")
     documents = []
@@ -895,9 +1197,17 @@ def prepare_documents(context: dict, variant: str = "role_aligned") -> list[dict
             content = renderer(blocks, max_pages=pages)
             documents.append({"kind": kind, "filename": f"{kind}-{variant}-{stamp}-{version}.{extension}",
                               "mime_type": mime, "content": content, "sha256": hashlib.sha256(content).hexdigest(),
-                              "version_id": version, "created_at": created.isoformat(), "source_ids": evidence})
+                              "version_id": version, "created_at": created.isoformat(), "source_ids": evidence_by_kind[kind]})
     return StudioDocuments(documents, model_metadata=_finish_metadata(),
-                           questions=_pending_questions(credential_questions + _questions(output.questions), payload))
+                           questions=_pending_questions(credential_questions + _questions([
+                               key for key in output.questions if key != "metrics" or not any(
+                                   re.search(r"\d", claim.text) and re.match(r"^(?:Reduced|Increased|Saved|Shortened|Owned|Improved|Delivered)\b", claim.text)
+                                   for _, selected in sections for claim in selected)])
+                               + _document_writing_questions(facts, hints, sections, paragraphs), payload),
+                           review=_document_review(facts, hints, sections, letter_claims, output.requirements,
+                                                   version, created.isoformat()),
+                           composition={"version": "source-composition-v1", "letter_paragraphs": paragraphs,
+                                        "recalled_letter_source_ids": recalled_letter_ids})
 
 
 def rank_job(context: dict) -> dict:
@@ -907,8 +1217,8 @@ def rank_job(context: dict) -> dict:
         raise StudioError("Add a job description before requesting a match score.")
     payload.update(operation="rank")
     output = _complete(payload, _RankOutput)
-    # A failed grounding/rubric check is not a successful zero-score match.
-    # Propagate it so the API records failure and preserves any earlier score.
+    # Invalid factual claims still fail the operation. Invalid comparisons become
+    # unresolved review, not fabricated zero-fit scores or requirement clearance.
     _validate_claims(output.claims, facts)
     credential_guard, credential_questions, credential_notes = _review_credentials(output, payload, facts, context)
     # Only a backend-confirmed, job-specific status may resolve eligibility.
@@ -930,6 +1240,8 @@ def rank_job(context: dict) -> dict:
     if credential_guard:
         recommendation = "review"
         lines.append("This fit estimate is provisional because mandatory or ambiguous requirements still need review.")
+    if get_model_metadata().get("rubric_reason_code") == "rubric_contract_invalid":
+        lines.append("The numeric fit estimate is unvalidated, not a pass on any requirement.")
     preferences = context.get("preferences") or {}
     job_text = str(job.get("description") or "")
     explicit_onsite = job.get("workplace_type") in {"onsite", "hybrid"} or re.search(

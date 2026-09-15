@@ -7,6 +7,7 @@ import { loadMobileWorkspace, mobileRequest, uploadMobileResume } from "./mobile
 import { MobileApiError, validateResume } from "./mobileTransport";
 import { clearDraft, draftStorage, readDraft, saveDraft } from "./onboardingDraft";
 import type { OnboardingDraft, WizardFields } from "./onboardingDraft";
+import { countryName, remoteCountries } from "./countries";
 
 type Props = { session: Session; profile: BetaProfile | null; preferences: JobPreferences | null; onComplete: () => Promise<void> };
 const STEPS = ["Basics", "Target roles", "Eligibility", "Resume", "Review"];
@@ -17,6 +18,9 @@ function initialFields(profile: BetaProfile | null, preferences: JobPreferences 
     targetTitles: preferences?.target_titles.join(", ") ?? "", preferredLocations: preferences?.preferred_locations.join(", ") ?? "",
     preferredRegions: preferences?.preferred_regions.join(", ") ?? "", remotePreference: preferences?.remote_preference ?? "open",
     sponsorshipRequired: preferences?.sponsorship_required ?? false, workAuthorizationNotes: preferences?.work_authorization_notes ?? "",
+    remoteCountryPolicy: preferences?.discovery_rules?.remote_country_policy ?? "review",
+    remoteCountryCodes: preferences?.discovery_rules?.remote_country_codes.join(", ") ?? "",
+    sponsorshipPolicy: preferences?.discovery_rules?.sponsorship_policy ?? "review",
     careerText: profile?.career_text ?? "", factsConfirmed: false,
   };
 }
@@ -45,7 +49,7 @@ export function OnboardingWizard({ session, profile, preferences, onComplete }: 
   const update = <K extends keyof WizardFields>(key: K, value: WizardFields[K]) => setDraft(current => ({ ...current, fields: { ...current.fields, [key]: value, ...(key === "careerText" ? { factsConfirmed: false } : {}) } }));
   const validate = (all = false) => {
     if ((all || draft.step === 0) && !fields.displayName.trim()) return "Add your name in Basics.";
-    if ((all || draft.step === 0) && fields.careerText.trim() && !fields.factsConfirmed) return "Review and confirm your career facts in Basics.";
+    if ((all || draft.step === 0) && fields.careerText.trim() && !fields.factsConfirmed) return "Review and confirm your career facts before continuing.";
     if (all || draft.step === 1) {
       if (!summary.roles.length) return "Add at least one target role.";
       if ([summary.roles, summary.locations, summary.regions].some(items => items.length > 30 || items.some(item => item.length > 160))) return "Use up to 30 items per list, each up to 160 characters.";
@@ -54,6 +58,11 @@ export function OnboardingWizard({ session, profile, preferences, onComplete }: 
       if (draft.uploadUncertain) return "Check the previous upload before continuing.";
       if (draft.fileName && !draft.uploadedResumeId && !file) return "Reselect your resume in Resume, or explicitly skip the pending upload.";
       if (file) { try { validateResume(file); } catch (cause) { return (cause as Error).message; } }
+    }
+    if (all || draft.step === 2) {
+      const codes = listFrom(fields.remoteCountryCodes ?? "").map(code => code.toUpperCase());
+      if (codes.length > 30 || codes.some(code => !/^[A-Z]{2}$/.test(code)) || new Set(codes).size !== codes.length) return "Use unique two-letter country codes, such as AE, GB or DE, up to 30 countries.";
+      if (!fields.sponsorshipRequired && fields.sponsorshipPolicy === "require_explicit") return "To require a sponsorship offer, keep ‘I need visa sponsorship’ selected, or change the sponsorship rule to review unknowns.";
     }
     return null;
   };
@@ -73,7 +82,13 @@ export function OnboardingWizard({ session, profile, preferences, onComplete }: 
         target_titles: summary.roles, preferred_locations: summary.locations, preferred_regions: summary.regions,
         remote_preference: fields.remotePreference, sponsorship_required: fields.sponsorshipRequired,
         work_authorization_notes: fields.workAuthorizationNotes.trim() || null, minimum_match_score: preferences?.minimum_match_score ?? 7,
+        discovery_rules: {
+          remote_country_policy: fields.remoteCountryPolicy ?? preferences?.discovery_rules?.remote_country_policy ?? "review",
+          remote_country_codes: listFrom(fields.remoteCountryCodes ?? preferences?.discovery_rules?.remote_country_codes.join(", ") ?? "").map(code => code.toUpperCase()),
+          sponsorship_policy: fields.sponsorshipPolicy ?? preferences?.discovery_rules?.sponsorship_policy ?? "review",
+        },
       } });
+      let savedResumeId = draft.uploadedResumeId;
       if (file && !draft.uploadedResumeId) {
         // Persist the ambiguous state before sending; a reload must not silently resend.
         const pending = { ...draft, uploadUncertain: true, uploadKey: draft.uploadKey ?? crypto.randomUUID() };
@@ -81,6 +96,7 @@ export function OnboardingWizard({ session, profile, preferences, onComplete }: 
         try {
           const resume = await uploadMobileResume(userId, file, signal, pending.uploadKey);
           const receipt = { ...pending, uploadedResumeId: resume.id, uploadUncertain: false };
+          savedResumeId = resume.id;
           saveDraft(draftStorage(), userId, receipt); setDraft(receipt); setFile(null);
         } catch (cause) {
           if (cause instanceof MobileApiError && cause.status >= 400 && cause.status < 500) {
@@ -88,6 +104,17 @@ export function OnboardingWizard({ session, profile, preferences, onComplete }: 
           }
           setRecoveryKey(current => current + 1);
           throw cause;
+        }
+      }
+      if (savedResumeId && !fields.careerText.trim()) {
+        const extracted = await mobileRequest<{ text: string }>(userId, `/resumes/${savedResumeId}/text`, { signal });
+        if (extracted.text.trim()) {
+          // Never promote parsed resume claims to confirmed profile facts without
+          // review. Keep the successful upload receipt so confirmation cannot reupload.
+          setDraft(current => ({ ...current, uploadedResumeId: savedResumeId, uploadUncertain: false,
+            fields: { ...current.fields, careerText: extracted.text, factsConfirmed: false } }));
+          setNotice("Your resume is saved. Review the extracted career facts below, confirm they are accurate, then finish to find roles. No AI has run.");
+          return;
         }
       }
       await mobileRequest(userId, "/profile", { method: "PUT", signal, body: { onboarding_completed_at: new Date().toISOString() } });
@@ -137,6 +164,12 @@ export function OnboardingWizard({ session, profile, preferences, onComplete }: 
           <p>These preferences do not confirm work rights for any job. Review eligibility separately in each role’s Studio.</p>
           <label>Work preference<select value={fields.remotePreference} onChange={event => update("remotePreference", event.target.value as WizardFields["remotePreference"])}><option value="open">Open to remote, hybrid, or on-site</option><option value="remote_only">Remote only</option><option value="hybrid">Hybrid</option><option value="onsite">On-site</option></select></label>
           <label className="beta-onboarding-checkbox"><input type="checkbox" checked={fields.sponsorshipRequired} onChange={event => update("sponsorshipRequired", event.target.checked)} /><span>I need visa sponsorship for relocation.</span></label>
+          <label>Remote location rule<select value={fields.remoteCountryPolicy ?? "review"} onChange={event => update("remoteCountryPolicy", event.target.value as WizardFields["remoteCountryPolicy"])}><option value="review">Include unclear remote locations for my review</option><option value="require_explicit">Require explicit worldwide or selected-country remote work</option></select></label>
+          <label>Add a country for remote work<select value="" onChange={event => { if (event.target.value) update("remoteCountryCodes", [...new Set([...listFrom(fields.remoteCountryCodes ?? ""), event.target.value])].join(", ")); }}><option value="">Choose a country</option>{remoteCountries.map(country => <option key={country.code} value={country.code}>{country.name}</option>)}</select></label>
+          <ul aria-label="Selected remote countries">{listFrom(fields.remoteCountryCodes ?? "").map(code => <li key={code}>{countryName(code)} <button type="button" aria-label={`Remove ${countryName(code)}`} onClick={() => update("remoteCountryCodes", listFrom(fields.remoteCountryCodes ?? "").filter(value => value !== code).join(", "))}>Remove</button></li>)}</ul>
+          <p>Strict remote mode excludes unknown or conflicting country restrictions. With no countries selected, only explicit worldwide remote postings qualify. It does not establish work authorization.</p>
+          <label>Sponsorship rule<select value={fields.sponsorshipPolicy ?? "review"} onChange={event => update("sponsorshipPolicy", event.target.value as WizardFields["sponsorshipPolicy"])}><option value="review">Include unclear sponsorship for my review</option><option value="require_explicit">Only postings explicitly offering sponsorship</option></select></label>
+          <p>These are search rules, not employer guarantees. Salary, travel, notice period and company exclusions are not yet automated filters.</p>
           <label>Work authorisation notes<textarea maxLength={4000} value={fields.workAuthorizationNotes} onChange={event => update("workAuthorizationNotes", event.target.value)} /></label>
         </div>}
         {draft.step === 3 && <div className="beta-onboarding-fields">
@@ -151,8 +184,9 @@ export function OnboardingWizard({ session, profile, preferences, onComplete }: 
           <button type="button" onClick={() => { setFile(null); if (input.current) input.current.value = ""; setDraft(current => ({ ...current, fileName: "", uploadedResumeId: null, uploadUncertain: false, uploadKey: undefined })); setError(null); }}>Skip pending upload (keep any saved resume)</button>
         </div>}
         {draft.step === 4 && <div>
-          <dl className="beta-onboarding-review"><div><dt>Name</dt><dd>{fields.displayName}</dd></div><div><dt>Target roles</dt><dd>{summary.roles.join(", ")}</dd></div><div><dt>Resume</dt><dd>{draft.uploadedResumeId ? "Already saved: " + draft.fileName : draft.fileName || "Skipped for now"}</dd></div><div><dt>Career facts</dt><dd>{fields.careerText.trim() ? "Reviewed self-reported text" : "Not added yet"}</dd></div></dl>
-          <p>Saving creates a private, manual-role preparation workspace. Nothing is sent to an employer.</p>
+          <dl className="beta-onboarding-review"><div><dt>Name</dt><dd>{fields.displayName}</dd></div><div><dt>Target roles</dt><dd>{summary.roles.join(", ")}</dd></div><div><dt>Resume</dt><dd>{draft.uploadedResumeId ? "Already saved: " + draft.fileName : draft.fileName || "Skipped for now"}</dd></div><div><dt>Career facts</dt><dd>{fields.careerText.trim() ? fields.factsConfirmed ? "Reviewed self-reported text" : "Awaiting your review" : "Not added yet"}</dd></div></dl>
+          <p>Next, Discover will find roles using your saved preferences and reviewed career facts. If you upload a resume without career facts, you will review its extracted text here first. Searching uses no AI credits; nothing is sent to an employer.</p>
+          {fields.careerText.trim() && draft.uploadedResumeId && <div className="beta-onboarding-fields"><h3>Review your resume facts</h3><p>Check employers, dates, skills and qualifications. Correct extraction mistakes; nothing here is independently verified.</p><label>Review extracted career facts<textarea rows={10} maxLength={100000} value={fields.careerText} onChange={event => update("careerText", event.target.value)} /></label><label className="beta-onboarding-checkbox"><input type="checkbox" checked={fields.factsConfirmed} onChange={event => update("factsConfirmed", event.target.checked)} /><span>I reviewed these extracted facts and confirm they are accurate.</span></label></div>}
           {draft.uploadUncertain && <button type="button" onClick={() => void checkUpload()}>Check previous upload</button>}
         </div>}
       </section>

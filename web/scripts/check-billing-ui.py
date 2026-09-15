@@ -17,6 +17,10 @@ fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
 expect.set_options(timeout=20000)
 READY = {"provider": "stripe", "mode": "test", "checkout_enabled": True, "portal_enabled": True, "configuration_ready": True, "plan_keys": ["operator_test_fixture"], "subscription": None, "subscription_status": "none"}
+READY.update(account_exists=True, reconciliation_pending=False, access={"allowed":False, "grant_source":None,
+    "expires_at":None,"period_end":None,"period_remaining":0,"daily_remaining":0})
+PLANS = {"mode":"test","plans":[{"plan_key":"operator_test_fixture","display_name":"Sandbox Career",
+    "amount_minor":321,"currency":"usd","interval":"month","interval_count":1,"period_limit":100,"daily_limit":10}]}
 URLS = {"checkout": "https://checkout.stripe.com/c/pay/cs_test_offline_fixture#original", "portal": "https://billing.stripe.com/p/session/test_offline_fixture"}
 
 
@@ -29,17 +33,21 @@ def billing_context(browser, width=390, scheme="light", mode="ready", unpaid=Fal
         state["status"].update(provider=None, checkout_enabled=False, portal_enabled=False, configuration_ready=False, plan_keys=[], subscription_status="not_loaded")
     if mode == "subscription":
         state["status"].update(subscription_status="active", subscription={"status": "active", "plan_key": "operator_test_fixture", "period_start": "2026-09-01T00:00:00Z", "paid_through": "2026-10-01T00:00:00Z", "cancel_at_period_end": True, "cancellation_status": "scheduled"})
+    if mode in ("live_unapproved", "live_approved"):
+        state["status"].update(mode="live",live_activation_approved=mode=="live_approved")
 
     def route_billing(route):
         request = route.request
         path = urlsplit(request.url).path
         assert request.headers.get("authorization", "").startswith("Bearer ") and "apikey" not in request.headers
-        if request.method == "GET" and path == "/api/mobile/billing":
+        if request.method == "GET" and path == "/api/mobile/billing/account":
             state["gets"] += 1
             if state["mode"] == "invite_denied":
                 route.fulfill(status=403, json={"detail": "This account is not invited to test billing. Contact the service operator."})
             else:
                 route.fulfill(json=state["status"])
+        elif request.method == "GET" and path == "/api/mobile/billing/plans":
+            route.fulfill(json={**PLANS,"mode":state["status"]["mode"]})
         elif request.method == "POST" and path in ("/api/mobile/billing/checkout", "/api/mobile/billing/portal"):
             body = request.post_data_json
             kind = path.rsplit("/", 1)[1]
@@ -60,8 +68,8 @@ def open_billing(page, unpaid=False):
     page.goto(fixture.BASE + "?checkout=success&paid=true")
     if not unpaid:
         page.get_by_role("button", name="Your profile", exact=True).click()
-    page.get_by_role("button", name="Billing test mode", exact=True).click()
-    expect(page.get_by_role("heading", name="Billing · test mode", exact=True)).to_be_visible()
+    page.get_by_role("button", name=re.compile(r"^(Billing test mode|Plans & access)$")).click()
+    expect(page.get_by_role("heading", name="Choose your job-search plan", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Refresh billing", exact=True)).to_be_enabled()
 
 
@@ -97,10 +105,20 @@ def main():
             print(evidence[-1])
             context.close()
 
-        for width, mode in [(1440, "disabled"), (390, "disabled"), (390, "subscription"), (390, "unsafe"), (1440, "write_failure"), (390, "invite_denied")]:
+        for width, mode in [(1440, "disabled"), (390, "disabled"), (390, "subscription"), (390, "unsafe"), (1440, "write_failure"), (390, "invite_denied"), (390,"live_unapproved"), (1440,"live_approved")]:
             context, page, state, base = billing_context(browser, width, mode=mode)
             open_billing(page)
-            if mode in ("disabled", "invite_denied"):
+            if mode == "live_approved":
+                expect(page.get_by_role("button",name="Continue to secure checkout",exact=True)).to_be_enabled()
+                expect(page.get_by_role("button",name="Manage subscription",exact=True)).to_be_enabled()
+                expect(page.get_by_role("heading",name="Available plans",exact=True)).to_be_visible()
+                expect(page.get_by_text("Use test payment details only",exact=False)).to_have_count(0)
+                assert not state["writes"]  # display only, even in an approved live-mode fixture
+            elif mode == "live_unapproved":
+                expect(page.get_by_role("alert")).to_contain_text("could not be verified")
+                expect(page.get_by_role("button",name="Create test checkout link",exact=True)).to_be_disabled()
+                assert not state["writes"]
+            elif mode in ("disabled", "invite_denied"):
                 expect(page.get_by_role("button", name="Create test checkout link", exact=True)).to_be_disabled()
                 expect(page.get_by_role("button", name="Create test portal link", exact=True)).to_be_disabled()
                 if mode == "disabled":
@@ -112,8 +130,8 @@ def main():
             elif mode == "subscription":
                 expect(page.get_by_role("button", name="Create test checkout link", exact=True)).to_be_disabled()
                 expect(page.get_by_role("button", name="Create test portal link", exact=True)).to_be_enabled()
-                expect(page.locator(".billing-details")).to_contain_text("active")
-                expect(page.locator(".billing-details")).to_contain_text("Scheduled")
+                expect(page.locator(".billing-details").last).to_contain_text("active")
+                expect(page.locator(".billing-details").last).to_contain_text("Scheduled")
                 assert not state["writes"]
             else:
                 page.get_by_role("button", name="Create test checkout link", exact=True).click()
@@ -129,7 +147,7 @@ def main():
             context.close()
         browser.close()
     (output / "results.json").write_text(json.dumps({"fixture_only": True, "passed": len(evidence), "scenarios": evidence, "live_services": False}, indent=2) + "\n")
-    print("9 isolated billing browser scenarios passed; no Stripe navigation, payments or access grants.")
+    print(f"{len(evidence)} isolated billing browser scenarios passed; no Stripe navigation, payments or access grants.")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,10 @@ import Combine
     @Published private(set) var jobDetails: [String: Opportunity] = [:]
     @Published private(set) var workspaceRevision = 0
     @Published private(set) var operationWarnings: [String: String] = [:]
+    @Published private(set) var discovery = DiscoverySearchState()
+    @Published private(set) var discoverySavingSourceID: String?
+    @Published private(set) var discoverySaveError: String?
+    @Published private(set) var uncertainDiscoverySaves: Set<String> = []
     let storageRecovery = StorageRecoveryController()
     private var recoveryObservation: AnyCancellable?
     #if DEBUG
@@ -47,6 +51,7 @@ import Combine
     }
     func enterPreview() {
         sessionEpoch = UUID(); jobDetails = [:]; workspaceRevision += 1
+        resetDiscovery()
         operationWarnings = [:]; storageRecovery.reset()
         isPreview = true; workspace = .preview; chat = []; error = nil
         #if DEBUG
@@ -63,6 +68,7 @@ import Combine
     }
     private func clearSession() {
         sessionEpoch = UUID()
+        resetDiscovery()
         refreshTask?.cancel(); refreshTask = nil
         if !isUITesting { SecureSession.clear() }
         session = nil; isPreview = false; workspace = .empty; chat = []; notice = nil
@@ -86,6 +92,7 @@ import Combine
         if verified.expiresAt == nil { verified.expiresAt = Date().timeIntervalSince1970 + (verified.expiresIn ?? 3600) }
         verified.authority = configuration.supabaseUrl
         sessionEpoch = UUID()
+        resetDiscovery()
         try SecureSession.save(verified); session = verified; isPreview = false
         try await reload()
     }
@@ -186,6 +193,106 @@ import Combine
         try requireLive()
         _ = try await client.request("jobs", method: "POST", token: token(), body: ["source_url": url, "title": title, "company_name": company, "location_text": location, "description": description])
         try await reload(); notice = "Opportunity added to your workspace."
+    }
+    var hasDiscoveryPreferences: Bool {
+        workspace.preferences?.targetTitles?.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } == true
+    }
+    var discoveryScope: DiscoveryScope? {
+        guard !isPreview, let session else { return nil }
+        return DiscoveryScope(owner: session.user.id, authority: configuration.supabaseUrl, apiBase: configuration.apiBase,
+                              sessionID: sessionEpoch.uuidString, profile: workspace.profile, preferences: workspace.preferences)
+    }
+    private func resetDiscovery() {
+        discovery = DiscoverySearchState(); discoverySavingSourceID = nil
+        discoverySaveError = nil; uncertainDiscoverySaves = []
+    }
+    func loadDiscovery(refresh: Bool = false) async {
+        if discovery.scope != discoveryScope { discovery = DiscoverySearchState() }
+        guard !isUITesting, !isPreview, hasDiscoveryPreferences, let scope = discoveryScope,
+              let requestID = discovery.begin(scope: scope, refresh: refresh) else { return }
+        let epoch = sessionEpoch
+        let api = client
+        operations += 1; isBusy = true
+        defer { operations -= 1; isBusy = operations > 0 }
+        do {
+            let access: String
+            do { access = try await token() }
+            catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { throw DiscoveryFailure.cancelled }
+                throw DiscoveryFailure.signIn
+            }
+            try Task.checkCancellation()
+            guard epoch == sessionEpoch, scope == discoveryScope else { throw CancellationError() }
+            let result = try await api.discoverySearch(token: access)
+            try Task.checkCancellation()
+            guard epoch == sessionEpoch, scope == discoveryScope else { throw CancellationError() }
+            discovery.finish(id: requestID, scope: scope, response: result)
+        } catch {
+            guard epoch == sessionEpoch, scope == discoveryScope else { return }
+            discovery.finish(id: requestID, scope: scope, failure: DiscoveryFailure.sanitized(error))
+        }
+    }
+    func savedDiscoveryJob(_ job: DiscoveryJob) -> Opportunity? {
+        guard let url = discoveryListingURL(job.sourceUrl) else { return nil }
+        return workspace.jobs.first { UUID(uuidString: $0.id) != nil && discoveryListingURL($0.sourceUrl) == url }
+    }
+    func refreshDiscoverySavedRoles() async {
+        guard !isBusy else { return }
+        let epoch = sessionEpoch
+        operations += 1; isBusy = true
+        defer { operations -= 1; isBusy = operations > 0 }
+        do {
+            try await reload()
+            guard epoch == sessionEpoch else { return }
+            uncertainDiscoverySaves = []; discoverySaveError = nil
+        } catch {
+            guard epoch == sessionEpoch else { return }
+            discoverySaveError = "Saved roles could not refresh. Check your connection and session, then refresh again."
+        }
+    }
+    func saveDiscoveryRole(_ job: DiscoveryJob) async {
+        guard !isBusy, discoverySavingSourceID == nil, savedDiscoveryJob(job) == nil,
+              !uncertainDiscoverySaves.contains(job.sourceUrl), let scope = discoveryScope,
+              discovery.scope == scope, discovery.response?.results.contains(where: { $0.id == job.id }) == true else { return }
+        let epoch = sessionEpoch
+        let api = client
+        var sent = false
+        discoverySavingSourceID = job.sourceId; discoverySaveError = nil
+        operations += 1; isBusy = true
+        defer {
+            operations -= 1; isBusy = operations > 0
+            if epoch == sessionEpoch { discoverySavingSourceID = nil }
+        }
+        do {
+            try requireLive()
+            let access: String
+            do { access = try await token() }
+            catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { throw DiscoveryFailure.cancelled }
+                throw DiscoveryFailure.signIn
+            }
+            try Task.checkCancellation()
+            guard epoch == sessionEpoch, scope == discoveryScope else { throw CancellationError() }
+            _ = try job.savePayload()
+            sent = true
+            let saved = try await api.saveDiscoveryJob(job, token: access)
+            guard epoch == sessionEpoch else { return }
+            // Retain a confirmed save even if preferences changed while in flight.
+            // Never insert the public posting or copy its relevance into score.
+            if !workspace.jobs.contains(where: { $0.id == saved.id }) { workspace.jobs.insert(saved, at: 0) }
+            cacheJob(saved)
+            uncertainDiscoverySaves.remove(job.sourceUrl)
+            notice = "Role saved. Open saved role to continue. No AI or application was started."
+        } catch {
+            guard epoch == sessionEpoch else { return }
+            let failure = DiscoveryFailure.sanitized(error)
+            if sent && ![.signIn, .rateLimited, .notSupported].contains(failure) {
+                uncertainDiscoverySaves.insert(job.sourceUrl)
+                discoverySaveError = DiscoveryFailure.uncertainSave.localizedDescription
+            } else {
+                discoverySaveError = failure.localizedDescription
+            }
+        }
     }
     func upload(url: URL, label: String, roleFocus: String) async throws {
         try requireLive()

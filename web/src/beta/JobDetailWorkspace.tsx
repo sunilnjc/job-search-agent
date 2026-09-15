@@ -1,6 +1,7 @@
 import type { BetaJob } from "./types";
 import { safePostingUrl } from "./workspace";
 import { WorkspaceDialog } from "./WorkspaceDialog";
+import { assessmentDisplay } from "./assessmentDisplay";
 
 export type JobDetailWorkspaceProps = {
   job: BetaJob;
@@ -61,7 +62,7 @@ export function JobDetailWorkspace({ job, onClose, onOpenStudio }: JobDetailWork
         </header>
 
         <div className="beta-job-detail-badges" aria-label="Role status">
-          <span className="beta-job-detail-badge beta-job-detail-badge-source">Source: {job.source === "manual" ? "Manually added" : job.source}</span>
+          <span className="beta-job-detail-badge beta-job-detail-badge-source">Source: {job.source === "manual" ? "Saved posting — see original source" : job.source}</span>
           <span className={`beta-job-detail-badge beta-job-detail-badge-eligibility ${job.eligibility_status}`}>
             {labelForEligibility(job.eligibility_status)}
           </span>
@@ -94,7 +95,7 @@ export function JobDetailWorkspace({ job, onClose, onOpenStudio }: JobDetailWork
             </div>
             <p className="beta-job-detail-status-copy">{labelForEligibility(job.eligibility_status)}.</p>
             <p className="beta-job-detail-muted">
-              {job.score != null ? `Saved AI match estimate: ${job.score}/10. ${job.rationale || ""}` : "Open Studio to assess this role against your selected resume and confirmed career facts."} This is not an ATS score, hiring probability or independent verification of work rights.
+              {job.score != null ? `${assessmentDisplay(job)} ${job.rationale || ""}` : "Open Studio to assess this role against your selected resume and confirmed career facts."} This is not an ATS score, hiring probability or independent verification of work rights.
             </p>
           </section>
 

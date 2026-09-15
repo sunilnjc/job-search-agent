@@ -67,8 +67,9 @@ class StripeFixture:
         self.requests, self.timeline = [], []
         self.fault = None
         self.customer = {"id": "cus_A", "object": "customer", "livemode": False}
-        self.price = {"id": "price_Fixture", "livemode": False, "type": "recurring",
-                      "recurring": {"usage_type": "licensed"}}
+        self.price = {"id": "price_Fixture", "object": "price", "livemode": False, "type": "recurring",
+                      "active": True, "billing_scheme": "per_unit", "unit_amount": 321, "currency": "usd",
+                      "recurring": {"usage_type": "licensed", "interval": "month", "interval_count": 1}}
         self.sub = {"id": "sub_A", "object": "subscription", "livemode": False, "customer": "cus_A",
             "status": "active", "current_period_start": NOW - 100, "current_period_end": NOW + 100,
             "latest_invoice": "in_A", "cancel_at_period_end": False,
@@ -86,7 +87,8 @@ class StripeFixture:
         self.sessions, self.schedules, self.pending = [], [], []
         self.invoices = [self.invoice]
         self.portal_config = {"id": "bpc_Fixture", "object": "billing_portal.configuration",
-            "livemode": False, "active": True, "features": {"subscription_update": {"enabled": False}}}
+            "livemode": False, "active": True, "features": {"subscription_update": {"enabled": False},
+                "subscription_cancel": {"enabled": True, "mode": "at_period_end"}}}
         self.after_fetch = None
 
     def session(self):
@@ -109,6 +111,8 @@ class StripeFixture:
             result = self.customer
         elif path == "/v1/customers/cus_A":
             result = self.customer
+        elif path == "/v1/prices/price_Fixture" and method == "GET":
+            result = self.price
         elif path == "/v1/subscriptions" and method == "GET":
             assert request.url.params["customer"] == "cus_A" and request.url.params["status"] == "all"
             result = listed(self.subscriptions)

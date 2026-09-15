@@ -5,7 +5,7 @@ import { downloadMobileFile, loadMobileWorkspace, mobileRequest, uploadMobileRes
 import { MobileApiError, validateResume } from "./mobileTransport";
 import { RecoveryPanel } from "./RecoveryPanel";
 
-export function DocumentsPanel({ session, onChanged }: { session: Session; onChanged?: () => void | Promise<void> }) {
+export function DocumentsPanel({ session, onChanged, onDiscover }: { session: Session; onChanged?: () => void | Promise<void>; onDiscover?: () => void }) {
   const [resumes, setResumes] = useState<BetaResume[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -42,10 +42,16 @@ export function DocumentsPanel({ session, onChanged }: { session: Session; onCha
       const fingerprint = file.name + ":" + Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()))).map(byte => byte.toString(16).padStart(2, "0")).join("");
       const key = uploadKeys.current.get(fingerprint) ?? crypto.randomUUID();
       uploadKeys.current.set(fingerprint, key);
-      await uploadMobileResume(userId, file, request.current.signal, key);
+      const uploaded = await uploadMobileResume(userId, file, request.current.signal, key);
       uploadKeys.current.delete(fingerprint);
       setNotice("Resume validated and uploaded. Review extracted facts before using them for preparation.");
       await load(); await onChanged?.();
+      try {
+        const extracted = await mobileRequest<{ text: string }>(userId, `/resumes/${uploaded.id}/text`, { signal: request.current.signal });
+        setReviewText(extracted.text); setConfirmed(false);
+      } catch {
+        setNotice("Your resume is saved. Extracted text could not load; choose Review extracted facts below to retry. Do not upload the file again.");
+      }
     } catch (cause) {
       if (cause instanceof MobileApiError && (cause.uncertain || cause.status >= 500)) setUncertainUpload(true);
       setRecoveryKey(current => current + 1);
@@ -61,7 +67,7 @@ export function DocumentsPanel({ session, onChanged }: { session: Session; onCha
     const careerText = existing.includes(addition) ? existing : [existing, addition].filter(Boolean).join("\n\n");
     if (careerText.length > 100000) throw new Error("Combined career facts exceed 100,000 characters. Edit your profile to shorten them first.");
     await mobileRequest(userId, "/profile", { method: "PUT", signal: request.current.signal, body: { career_text: careerText } });
-    setReviewText(null); setConfirmed(false); setNotice("Your reviewed career facts were saved as self-reported information."); await onChanged?.();
+    setReviewText(null); setConfirmed(false); setNotice("Your reviewed career facts were saved. Discover can now use them to prioritize relevant roles."); await onChanged?.();
   });
   return <section className="beta-documents-panel workflow" aria-label="Source resumes">
     <div className="beta-documents-panel__header"><div><p className="beta-eyebrow">Private documents</p><h2>Your source resumes</h2><p>PDF or DOCX, up to 8 MiB. Uploading does not start AI or send anything to an employer. Select a source explicitly in each role’s Studio.</p></div>
@@ -69,6 +75,7 @@ export function DocumentsPanel({ session, onChanged }: { session: Session; onCha
       <input ref={input} aria-label="Source resume file" className="beta-visually-hidden" type="file" accept=".pdf,.docx" disabled={busy || uncertainUpload} onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); }} />
     </div>
     {error && <p className="beta-error" role="alert">{error}</p>}{notice && <p className="beta-notice" role="status">{notice}</p>}
+    {onDiscover && resumes.length > 0 && <button className="beta-primary" disabled={busy || reviewText !== null} onClick={onDiscover}>Find roles for me</button>}
     {uncertainUpload && <p className="beta-notice">Upload outcome is uncertain. Refresh and inspect the saved list before selecting the file again. <button disabled={busy} onClick={() => void act(async () => { await load(); setUncertainUpload(false); setNotice("Saved resumes refreshed. Check filenames before choosing to upload again."); })}>Refresh saved resumes</button></p>}
     {loading ? <p>Loading private resumes…</p> : resumes.length === 0 ? <p>No saved resume yet. Upload one here to enable document preparation.</p> : <ul className="beta-documents-list">{resumes.map(resume => <li key={resume.id} className="beta-documents-list__item">
       <div><strong>{resume.label}</strong><p>{resume.original_filename} · {(resume.byte_size / 1024).toFixed(0)} KiB{resume.is_default ? " · Default on mobile" : ""}</p></div>

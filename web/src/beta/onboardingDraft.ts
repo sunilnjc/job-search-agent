@@ -3,6 +3,9 @@ export type WizardFields = {
   preferredLocations: string; preferredRegions: string;
   remotePreference: "remote_only" | "hybrid" | "onsite" | "open";
   sponsorshipRequired: boolean; workAuthorizationNotes: string;
+  remoteCountryPolicy?: "review" | "require_explicit";
+  remoteCountryCodes?: string;
+  sponsorshipPolicy?: "review" | "require_explicit";
   careerText: string; factsConfirmed: boolean;
 };
 export type OnboardingDraft = {
@@ -24,6 +27,8 @@ export function readDraft(storage: Pick<Storage, "getItem">, userId: string): On
     if (draft.version !== 1 || !Number.isInteger(draft.step) || draft.step < 0 || draft.step > 4 || !draft.fields) return null;
     for (const key of ["displayName", "baseLocation", "targetTitles", "preferredLocations", "preferredRegions", "workAuthorizationNotes", "careerText"] as const) if (typeof draft.fields[key] !== "string") return null;
     if (!["open", "remote_only", "hybrid", "onsite"].includes(draft.fields.remotePreference) || typeof draft.fields.sponsorshipRequired !== "boolean" || typeof draft.fields.factsConfirmed !== "boolean" || typeof draft.fileName !== "string" || typeof draft.uploadUncertain !== "boolean" || !(draft.uploadedResumeId === null || typeof draft.uploadedResumeId === "string")) return null;
+    for (const key of ["remoteCountryPolicy", "sponsorshipPolicy"] as const) if (draft.fields[key] !== undefined && !["review", "require_explicit"].includes(draft.fields[key]!)) return null;
+    if (draft.fields.remoteCountryCodes !== undefined && (typeof draft.fields.remoteCountryCodes !== "string" || draft.fields.remoteCountryCodes.length > 160)) return null;
     return draft;
   } catch { return null; }
 }

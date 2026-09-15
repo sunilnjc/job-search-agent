@@ -65,6 +65,21 @@ class ProfileUpdate(InputModel):
     career_background: Optional[CareerBackground] = None
 
 
+class DiscoveryPreferenceRules(InputModel):
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    remote_country_policy: Literal["review", "require_explicit"] = "review"
+    remote_country_codes: List[Annotated[str, StringConstraints(pattern=r"^[A-Z]{2}$")]] = Field(default_factory=list, max_length=30)
+    sponsorship_policy: Literal["review", "require_explicit"] = "review"
+
+    @field_validator("remote_country_codes")
+    @classmethod
+    def known_countries(cls, values):
+        from .discovery import SUPPORTED_REMOTE_COUNTRY_CODES
+        if len(set(values)) != len(values) or any(value not in SUPPORTED_REMOTE_COUNTRY_CODES for value in values):
+            raise ValueError("Use unique ISO two-letter country codes")
+        return values
+
+
 class PreferencesUpdate(InputModel):
     target_titles: List[ShortText] = Field(default_factory=list, max_length=30)
     preferred_locations: List[ShortText] = Field(default_factory=list, max_length=30)
@@ -73,6 +88,13 @@ class PreferencesUpdate(InputModel):
     sponsorship_required: StrictBool = False
     work_authorization_notes: Optional[str] = Field(None, max_length=4000)
     minimum_match_score: float = Field(7.0, ge=0, le=10, strict=True)
+    discovery_rules: DiscoveryPreferenceRules = Field(default_factory=DiscoveryPreferenceRules)
+
+    @model_validator(mode="after")
+    def consistent_discovery_rules(self):
+        if self.discovery_rules.sponsorship_policy == "require_explicit" and not self.sponsorship_required:
+            raise ValueError("Explicit sponsorship filtering requires sponsorship_required")
+        return self
 
 
 class JobCreate(InputModel):

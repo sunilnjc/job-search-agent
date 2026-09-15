@@ -1,0 +1,53 @@
+{
+  "id": "P51",
+  "name": "Devon Fixture",
+  "email": "rich_senior_backend@example.test",
+  "phone": "+1 202-555-0151",
+  "location": "Dubai, UAE",
+  "profession": "Backend Engineering",
+  "career_stage": "senior",
+  "roles": ["Senior Backend Engineer", "Staff Software Engineer"],
+  "locations": ["UAE", "Europe"],
+  "remote": "remote_preferred",
+  "sponsorship": true,
+  "constraints": "Synthetic candidate is open to relocation where sponsorship is explicitly available; no US work authorization is claimed.",
+  "synthetic_notice": "All names, contacts, employers, dates and results in this fixture are invented test data, not a real candidate. The deterministic selector is not a live AI quality assessment.",
+  "facts": [
+    "Senior Backend Engineer",
+    "Senior Software Engineer, Fictional Harbor Payments, 2021-present.",
+    "Built Java and Spring Boot payment services at Fictional Harbor Payments in 2022, separating account validation from settlement processing and supporting 180000 daily payment instructions with idempotent request handling and documented recovery procedures.",
+    "Reduced payment reconciliation latency at Fictional Harbor Payments from 4 hours to 40 minutes in 2024 by replacing sequential account checks with bounded parallel batches; the measurement covered the same nightly dataset of 600000 records.",
+    "Designed Kafka event contracts at Fictional Harbor Payments in 2023 for payment-status updates, adding consumer deduplication and replay tests that reduced duplicate downstream postings from 45 per month to 2 per month over a three-month observation period.",
+    "Implemented PostgreSQL query and index changes at Fictional Harbor Payments in 2024 for a customer-risk review service, reducing p95 case-history retrieval latency from 1400 ms to 420 ms while retaining the existing audit records and retention rules.",
+    "Led technical design reviews at Fictional Harbor Payments for six engineers during a 2025 settlement-service migration, documenting rollback decisions and mentoring two colleagues through implementation; the release had no rollback, and this was technical leadership without direct reports.",
+    "Software Engineer, Example Cedar Banking, 2017-2021.",
+    "Developed REST endpoints with Java and Spring Boot at Example Cedar Banking in 2018 for internal payment investigations, replacing three spreadsheet handoffs and making status histories available to a 24-person operations group through reviewed access controls.",
+    "Migrated a reporting workload at Example Cedar Banking to PostgreSQL in 2019, preserving account-level reconciliation checks and reducing a standard daily extract from 26 minutes to 9 minutes across ten consecutive monitored business-day runs.",
+    "Automated integration tests and release checks at Example Cedar Banking in 2020 using JUnit and GitHub Actions, reducing the manual regression checklist from 4 hours to 55 minutes while retaining human approval for production releases.",
+    "Improved incident diagnosis at Example Cedar Banking in 2020 with AWS CloudWatch dashboards and structured correlation IDs, reducing median investigation time from 90 minutes to 35 minutes across 18 incidents; the operations team retained incident-command responsibility.",
+    "Created a Redis-backed lookup cache at Example Cedar Banking in 2021 for reference data, reducing repeated database reads by 62% in a controlled load test and documenting expiry and invalidation limits; this was not a claim of a production-wide cost reduction.",
+    "BSc Computer Science, Fictional Northbridge Institute, 2017.",
+    "Skills: Java, Spring Boot, Kafka, PostgreSQL, Redis, AWS CloudWatch, JUnit and GitHub Actions, supported by the named employment examples above. No Kubernetes production experience or people-management responsibility is claimed."
+  ],
+  "job": {
+    "title": "Senior Backend Engineer",
+    "company_name": "Synthetic Payment Risk Platform",
+    "description": "Build reliable Java and Spring Boot payment services. Develop Kafka event pipelines with idempotent processing. Improve PostgreSQL query performance for customer-risk workflows. Collaborate on incident investigation and mentor engineers through technical design. Relocation sponsorship may be available, subject to employer confirmation.",
+    "location_text": "Berlin, Germany",
+    "workplace_type": "hybrid",
+    "employment_type": "full_time"
+  },
+  "test_contract": {
+    "headline_index": 0,
+    "employment_indices": [1, 7],
+    "accomplishment_indices": [2, 3, 4, 5, 6, 8, 9, 10, 11, 12],
+    "accomplishment_employers": {
+      "2": "Fictional Harbor Payments", "3": "Fictional Harbor Payments", "4": "Fictional Harbor Payments", "5": "Fictional Harbor Payments", "6": "Fictional Harbor Payments",
+      "8": "Example Cedar Banking", "9": "Example Cedar Banking", "10": "Example Cedar Banking", "11": "Example Cedar Banking", "12": "Example Cedar Banking"
+    },
+    "education_indices": [13],
+    "skills_indices": [14],
+    "letter_indices": [2, 5, 9, 11],
+    "backed_skills": ["Java", "Spring Boot", "Kafka", "PostgreSQL", "Redis", "AWS CloudWatch", "JUnit", "GitHub Actions"]
+  }
+}

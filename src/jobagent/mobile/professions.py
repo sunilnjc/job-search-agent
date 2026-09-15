@@ -14,6 +14,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .exports import clean_text
+from .evidence import claim_allowed
 
 
 class Qualification(BaseModel):
@@ -88,7 +89,7 @@ _CREDENTIAL = re.compile(
     r"\b(?:licen[cs]e[ds]?|licensure|certificat(?:e|ion)s?|certified|registration|registered|"
     r"accreditation|accredited|RN|CPA|ACCA|ACA|CIMA|CFA|BLS|ACLS|NMC|GMC|journeyman)\b", re.I)
 _LICENCE = re.compile(r"\b(?:licen[cs]e[ds]?|licensure|registration|registered|RN|NMC|GMC|journeyman)\b", re.I)
-_EDUCATION = re.compile(r"\b(?:degree|diploma|bachelor'?s?|master'?s?|doctorate|PhD|BSc|MSc|GED|apprenticeship)\b", re.I)
+_EDUCATION = re.compile(r"\b(?:degree(?!\s+of\s+(?:autonomy|freedom|ownership|responsibility|independence|flexibility|complexity)\b)|diploma|bachelor'?s?|master'?s?|doctorate|PhD|BSc|MSc|GED|apprenticeship)\b", re.I)
 _HARD = re.compile(r"\b(?:requir(?:ed|ement|ements)|must|mandatory|essential|prerequisite|shall)\b", re.I)
 _PREFERRED = re.compile(r"\b(?:preferred|desirable|desired|optional|advantage|nice.to.have)\b", re.I)
 _NEGATED = re.compile(r"\b(?:not\s+(?:required|mandatory|essential)|no\s+(?:\w+\s+){0,6}(?:licen[cs]e|certification|degree|diploma)\s+(?:is\s+)?required)\b", re.I)
@@ -140,6 +141,59 @@ class RequirementAssessment(BaseModel):
 
 class RubricError(ValueError):
     """Invalid/unsubstantiated model criterion, without echoing model content."""
+
+
+def recalled_requirement_sources(requirements: list[RequirementAssessment], facts: list[dict]) -> list[dict]:
+    """Original-posting gates omitted from a VALID rubric, not inferred matches.
+
+    Passing [] deliberately recalls every mandatory or ambiguous credential gate.
+    Callers rejecting a rubric must pass [], never its partially validated items.
+    The studio ledger bounds posting segments to 100; no model text is returned.
+    """
+    covered = {ref for item in requirements for ref in item.requirement.source_ids}
+    return [fact for fact in facts if fact["kind"] == "job"
+            and fact["id"].startswith("job.requirements.") and fact["id"] not in covered
+            and (requirement_importance(fact["text"]) == "required"
+                 or (credential_text(fact["text"]) and requirement_importance(fact["text"]) != "preferred"))]
+
+
+def rejected_rubric_questions(facts: list[dict], review_id: str, *, suspicious_job=False) -> list[str]:
+    """Bounded unresolved review, retaining EVERY recalled source in <=6 groups.
+
+    Long/large postings use labelled excerpts, not truncated assertions. The full
+    statements remain in the generation snapshot. A generation-specific question
+    cannot be silently resolved by an answer to an older failed comparison.
+    This is a review request, never proof of support or an eligibility decision.
+    """
+    recalled = recalled_requirement_sources([], facts)
+    if len(recalled) > 100:
+        raise ValueError("Too many posting segments for bounded requirement review.")
+    # Never echo a discarded/unsafe fragment in a follow-up or snapshot. Its
+    # omission remains an explicit unresolved clean-posting request.
+    safe = [fact for fact in recalled if claim_allowed(fact)]
+    suspicious_job = suspicious_job or len(safe) != len(recalled)
+    recalled = safe
+    prefix = (f"The automated requirement comparison could not be validated (review {review_id}). "
+              "For each posting excerpt, confirm supporting facts or state the gap; nothing is cleared by this draft: ")
+    if not recalled:
+        questions = [prefix + "Please review the full posting and confirm its actual mandatory requirements."]
+    else:
+        # Six groups leave two of the API's eight slots for other follow-ups.
+        # The ledger has <=100 posting segments: at most 17 short excerpts/group.
+        size = max(1, (len(recalled) + 5) // 6)
+        excerpt_limit = 900 if size == 1 else 64
+        questions = []
+        for offset in range(0, len(recalled), size):
+            excerpts = []
+            for source in recalled[offset:offset + size]:
+                text = source["text"]
+                excerpt = text if len(text) <= excerpt_limit else text[:excerpt_limit] + "…"
+                excerpts.append(f'[{source["id"]}] "{excerpt}"')
+            questions.append(prefix + "; ".join(excerpts)
+                             + " Review complete statements in the original posting; excerpts may be shortened.")
+    if suspicious_job:
+        questions.append("Some posting text was omitted or unsafe to use. Please confirm the complete requirements from a clean employer posting.")
+    return questions
 
 
 def validate_rubric(requirements: list[RequirementAssessment], facts: list[dict]) -> None:
@@ -257,7 +311,9 @@ def credential_review(
               and requirement_importance(fact["text"]) == "required" and fact["id"] not in covered):
             review = True
             notes.append(f"An explicit mandatory requirement has not been evaluated [{fact['id']}].")
-            questions.append(f"Can you confirm whether you meet the mandatory requirement in posting source [{fact['id']}]?")
+            statement = fact["text"]
+            quoted = f'"{statement}"' if len(statement) <= 900 else f'"{statement[:850]}…" (excerpt; review the full posting)'
+            questions.append(f"Can you confirm whether you meet this mandatory requirement: {quoted}? Describe the supporting experience or say if it is a gap.")
     if suspicious_job:
         review = True
         notes.append("Some job text could not be used safely as requirement evidence.")

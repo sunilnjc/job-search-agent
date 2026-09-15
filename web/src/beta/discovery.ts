@@ -1,4 +1,5 @@
 import { safePostingUrl } from "./workspace.ts";
+import type { BetaProfile, JobPreferences } from "./types.ts";
 export type DiscoveryFilters = { titles: string[]; locations: string[]; workplace_type: "any" | "remote" | "hybrid" | "onsite" };
 export type DiscoveryRequest = { query: string; filters: DiscoveryFilters; limit: 20 };
 export type DiscoveryJob = {
@@ -10,6 +11,7 @@ export type DiscoveryJob = {
   match_reasons: string[]; eligibility_status: "unknown";
   eligibility: { status: "unknown"; provisional: true; independently_verified: false; reasons: string[] };
   persisted: false;
+  relevance?: { method: "profile_rules_v1"; score: number; reasons: string[]; gaps: string[]; review_required: boolean };
 };
 export type DiscoverySource = {
   source: string; status: "ok" | "partial" | "error"; cached: boolean;
@@ -22,7 +24,19 @@ export type DiscoveryResponse = {
   partial: boolean; truncated: boolean; matched_count: number; returned_count: number; searched_at: string;
   persisted: false; eligibility_verified: false;
   warnings?: string[];
+  ranking?: string;
 };
+/** Private, in-memory only. Invalidate on owner, career facts or preference changes. */
+export type DiscoverySnapshot = { key: string; result: DiscoveryResponse; receivedAt: number };
+export function discoveryContextKey(userId: string, profile: BetaProfile, preferences: JobPreferences) {
+  return JSON.stringify([userId, profile.career_text ?? "", profile.career_background ?? null,
+    preferences.target_titles, preferences.preferred_locations, preferences.preferred_regions,
+    preferences.remote_preference, preferences.sponsorship_required, preferences.work_authorization_notes,
+    preferences.discovery_rules ?? null]);
+}
+export function reusableDiscovery(snapshot: DiscoverySnapshot | null, key: string, now = Date.now()): DiscoveryResponse | null {
+  return snapshot?.key === key && now >= snapshot.receivedAt && now - snapshot.receivedAt < 300000 ? snapshot.result : null;
+}
 const text = (value: unknown, max: number) => typeof value === "string" && value.length <= max;
 const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const textList = (value: unknown) => Array.isArray(value) && value.length <= 50 && value.every(item => text(item, 2000));
@@ -46,6 +60,9 @@ export function checkedDiscoveryResponse(value: unknown): DiscoveryResponse {
       || typeof job.content_truncated !== "boolean" || !text(job.fetched_at, 100) || !textList(job.match_reasons) || job.persisted !== false || job.eligibility_status !== "unknown"
       || !job.eligibility || job.eligibility.status !== "unknown" || job.eligibility.independently_verified !== false || job.eligibility.provisional !== true || !textList(job.eligibility.reasons)
       || [job.source_published_at, job.source_created_at, job.source_updated_at].some(value => value != null && !text(value, 100))) throw invalid();
+    if (job.relevance !== undefined && (!job.relevance || job.relevance.method !== "profile_rules_v1" || !Number.isFinite(job.relevance.score)
+      || job.relevance.score < 0 || job.relevance.score > 100 || !textList(job.relevance.reasons) || !textList(job.relevance.gaps)
+      || typeof job.relevance.review_required !== "boolean")) throw invalid();
   }
   for (const source of data.sources) {
     if (!source || !text(source.source, 200) || !["ok", "partial", "error"].includes(source.status) || typeof source.cached !== "boolean" || typeof source.truncated !== "boolean"

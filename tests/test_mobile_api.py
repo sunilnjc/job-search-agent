@@ -102,6 +102,19 @@ class FakeSupabase:
         return self.add("resumes", user, **{"storage_path": storage_path, "original_filename": "resume.docx", "label": "Source resume", "mime_type": DOCX_MIME, "is_default": False, **values})
 
     def __call__(self, request):
+        # Offline cloud contract for migration 0011, shared with browser E2E.
+        # The separate SQL suite executes the REAL migration/RLS; this hook is
+        # not a production bypass or evidence of hosted schema deployment.
+        if request.url.path in {
+            '/rest/v1/rpc/mobile_packet_context', '/rest/v1/rpc/mobile_bind_packet_context',
+            '/rest/v1/rpc/mobile_packet_readiness', '/rest/v1/rpc/mobile_review_packet',
+        }:
+            from test_mobile_readiness_api import ReadinessFakeSupabase
+            if not hasattr(self, 'packet_contexts'):
+                self.packet_contexts, self.packet_reviews = {}, {}
+            fixture = ReadinessFakeSupabase.__new__(ReadinessFakeSupabase)
+            fixture.__dict__ = self.__dict__
+            return fixture(request)
         self.requests.append(request)
         if request.url.host != "mobile.example.test":
             raise AssertionError("Unexpected network destination")
@@ -537,6 +550,7 @@ class MobileAPITests(unittest.TestCase):
         self.studio.prepare_documents.assert_not_called()
 
     def test_ai_failure_is_not_success_and_never_leaks_exception(self):
+        self.supabase.add("candidate_context", career_text="Confirmed synthetic career facts.")
         job, resume = self.supabase.job(), self.supabase.resume()
         self.studio.prepare_documents.side_effect = RuntimeError("secret provider credential or prompt")
         response = self.request("POST", "jobs/" + job["id"] + "/prepare", json={"resume_id": resume["id"], "variant": "sse"})
@@ -546,6 +560,7 @@ class MobileAPITests(unittest.TestCase):
         self.assertEqual(self.supabase.tables["artifacts"], [])
 
     def test_invalid_ai_document_output_is_rejected(self):
+        self.supabase.add("candidate_context", career_text="Confirmed synthetic career facts.")
         job, resume = self.supabase.job(), self.supabase.resume()
         self.studio.prepare_documents.return_value = [{"kind": "tailored_resume", "filename": "../bad.txt", "mime_type": "text/plain", "content": b"text"}]
         response = self.request("POST", "jobs/" + job["id"] + "/prepare", json={"resume_id": resume["id"], "variant": "sse"})
@@ -702,6 +717,7 @@ class MobileAPITests(unittest.TestCase):
         self.assertIsNone(response.json().get("applied_at"))
 
     def test_verified_auth_email_is_used_only_in_export_context(self):
+        self.supabase.add("candidate_context", career_text="Confirmed synthetic career facts.")
         self.supabase.auth_emails[USER_A] = {"email": "candidate-a@example.test", "email_confirmed_at": "2026-09-01T00:00:00Z"}
         job, resume = self.supabase.job(), self.supabase.resume()
         response = self.request("POST", "jobs/" + job["id"] + "/prepare", json={"resume_id": resume["id"], "variant": "sse"})
@@ -874,6 +890,7 @@ class MobileAPITests(unittest.TestCase):
         self.assertEqual(repaired.status_code, 200, repaired.text)
 
     def test_prepare_supports_neutral_default_career_change_and_legacy_choices(self):
+        self.supabase.add("candidate_context", career_text="Confirmed synthetic career facts.")
         job, resume = self.supabase.job(title="Marketing Manager"), self.supabase.resume()
         for variant in (None, "role_aligned", "career_change", "sse", "fde"):
             with self.subTest(variant=variant):
@@ -882,8 +899,17 @@ class MobileAPITests(unittest.TestCase):
                     body["variant"] = variant
                 response = self.request("POST", "jobs/" + job["id"] + "/prepare", json=body)
                 self.assertEqual(response.status_code, 200, response.text)
-                self.assertEqual(set(response.json()), {"artifacts", "questions"})
-                self.assertEqual(response.json()["questions"], [])
+                result = response.json()
+                self.assertEqual(set(result), {"artifacts", "questions", "model_run_id", "document_review"})
+                self.assertEqual(result["questions"], [])
+                run = self.supabase.tables["model_runs"][-1]
+                self.assertEqual(result["model_run_id"], run["id"])
+                self.assertEqual(run["status"], "succeeded")
+                self.assertEqual(run["output_summary"]["artifact_ids"], [row["id"] for row in result["artifacts"]])
+                # Legacy stub documents carry no evidence review. Preserve its
+                # explicit absence; never fabricate a reviewed/all-clear packet.
+                self.assertIsNone(result["document_review"])
+                self.assertIsNone(run["output_summary"]["document_review"])
                 self.assertEqual(self.studio.prepare_documents.call_args.args[1], variant or "role_aligned")
         calls = self.studio.prepare_documents.call_count
         for variant in ("healthcare", "", None, 42):
@@ -891,6 +917,7 @@ class MobileAPITests(unittest.TestCase):
         self.assertEqual(self.studio.prepare_documents.call_count, calls)
 
     def test_prepare_questions_reuse_answered_rows_without_reopening(self):
+        self.supabase.add("candidate_context", career_text="Confirmed synthetic career facts.")
         job, resume = self.supabase.job(), self.supabase.resume()
         old = self.supabase.add("mobile_questions", job_id=job["id"], prompt="What is your licence status?", answer="Not held", status="answered", remember=False)
         original = copy.deepcopy(old)
@@ -924,6 +951,7 @@ class MobileAPITests(unittest.TestCase):
         self.assertEqual(self.supabase.tables["model_runs"][0]["output_summary"]["question_ids"], [questions[0]["id"]])
 
     def test_missing_facts_422_has_persisted_question_rows_and_no_success(self):
+        self.supabase.add("candidate_context", career_text="Confirmed synthetic career facts; training not yet confirmed.")
         for operation in ("prepare", "rank"):
             with self.subTest(operation=operation):
                 job, resume = self.supabase.job(), self.supabase.resume()
@@ -950,6 +978,7 @@ class MobileAPITests(unittest.TestCase):
                 self.assertFalse(any(bucket == "application-artifacts" for bucket, _ in self.supabase.objects))
 
     def test_answer_without_remember_resolves_prepare_and_rank_next_attempt(self):
+        self.supabase.add("candidate_context", career_text="Confirmed synthetic career facts; training not yet confirmed.")
         job, resume = self.supabase.job(), self.supabase.resume()
         prompt = "Please confirm your qualification status."
         documents = self.studio.prepare_documents.return_value
@@ -999,6 +1028,7 @@ class MobileAPITests(unittest.TestCase):
         self.assertEqual([a["answer"] for a in self.studio.answer_chat.call_args.args[0]["answers"]], ["PROFILE TRANSIENT"])
 
     def test_question_dedupe_is_shared_by_prepare_rank_chat_but_not_jobs_or_owners(self):
+        self.supabase.add("candidate_context", career_text="Confirmed synthetic career facts.")
         job, other = self.supabase.job(), self.supabase.job()
         resume = self.supabase.resume()
         prompt = "Confirm your training?"
@@ -1048,6 +1078,7 @@ class MobileAPITests(unittest.TestCase):
         self.assertFalse(any(req.method == "PATCH" and req.url.path.endswith("/mobile_questions") for req in self.supabase.requests))
 
     def test_invalid_studio_questions_fail_before_artifact_or_score_writes(self):
+        self.supabase.add("candidate_context", career_text="Confirmed synthetic career facts.")
         job, resume = self.supabase.job(), self.supabase.resume()
         for invalid in (None, "One question", [42], [" "], ["?"], ["x" * 2001], ["Question"] * 9):
             for operation, adapter in (("prepare", self.studio.prepare_documents), ("rank", self.studio.rank_job)):
@@ -1061,6 +1092,7 @@ class MobileAPITests(unittest.TestCase):
         self.assertTrue(all(run["status"] == "failed" for run in self.supabase.tables["model_runs"]))
 
     def test_missing_facts_question_save_failure_is_not_fake_422_success(self):
+        self.supabase.add("candidate_context", career_text="Confirmed synthetic career facts; training not yet confirmed.")
         job, resume = self.supabase.job(), self.supabase.resume()
         self.studio.prepare_documents.side_effect = FakeMissingFactsError(["Confirm your training."])
         self.supabase.fault = lambda req: httpx.Response(500, text="Private upstream") if req.method == "POST" and req.url.path.endswith("/mobile_questions") else None
@@ -1145,7 +1177,7 @@ class MobileAPITests(unittest.TestCase):
 
     def test_repository_columns_and_write_grants_match_actual_sql(self):
         root = Path(__file__).resolve().parents[1]
-        sql = "\n".join((root / "supabase" / "migrations" / filename).read_text() for filename in ("0001_beta_multi_tenant.sql", "0002_mobile_career_workspace.sql", "0003_profession_neutral_background.sql", "0005_mobile_resume_operations.sql", "0006_mobile_artifact_operations.sql"))
+        sql = "\n".join((root / "supabase" / "migrations" / filename).read_text() for filename in ("0001_beta_multi_tenant.sql", "0002_mobile_career_workspace.sql", "0003_profession_neutral_background.sql", "0005_mobile_resume_operations.sql", "0006_mobile_artifact_operations.sql", "0012_discovery_rules.sql"))
         tables = {}
         for match in re.finditer(r"create table(?: if not exists)? public\.(\w+)\s*\((.*?)\n\);", sql, re.S):
             tables[match[1]] = set(re.findall(r"^  (\w+)\s+(?:uuid|text|numeric|boolean|bigint|timestamptz|jsonb)\b", match[2], re.M))

@@ -98,7 +98,7 @@ class LaunchPrivacyProbeTests(OfflineCase):
         self.client.headers.clear()
         tested = 0
         for route in self.app.routes:
-            if route.path == "/api/mobile/health":
+            if route.path in {"/api/mobile/health", "/api/mobile/version"}:
                 continue
             path = route.path
             for name in ("job_id", "resume_id", "artifact_id", "question_id"):

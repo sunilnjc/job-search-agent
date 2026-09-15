@@ -1,5 +1,9 @@
 .discovery-panel { display: grid; gap: 20px; }
 .discovery-panel h2 { margin-top: 0; }
+.discovery-next-step { border-left: 3px solid var(--beta-text); padding: 4px 16px 16px; margin-block: 18px; }
+.discovery-fit { padding: 14px 18px; background: var(--beta-surface); border: 1px solid var(--beta-border); border-radius: 12px; margin-block: 16px; }
+.discovery-fit h4 { margin: 0 0 8px; font-size: 1rem; }
+.discovery-fit ul { padding-left: 20px; margin: 0 0 12px; line-height: 1.55; }
 .discovery-filter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
 .discovery-filter-grid input, .discovery-panel input { width: 100%; }
 .discovery-panel small, .discovery-provenance { color: var(--beta-muted); font-size: .875rem; }

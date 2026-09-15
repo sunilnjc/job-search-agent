@@ -83,6 +83,8 @@ class MobileDiscoveryAPITests(unittest.TestCase):
             ("GET", "/auth/v1/user"),
             ("POST", "/rest/v1/rpc/mobile_check_access"),  # Read-only membership RPC, not an AI reservation.
             ("GET", "/rest/v1/job_preferences"),
+            ("GET", "/rest/v1/profiles"),
+            ("GET", "/rest/v1/candidate_context"),
         }
         for request in self.supabase.requests:
             self.assertIn((request.method, request.url.path), allowed_requests)
@@ -98,6 +100,20 @@ class MobileDiscoveryAPITests(unittest.TestCase):
         self.assertEqual(len(self.feeds.requests), 3)
         self.assertTrue(all(row["eligibility_status"] == "unknown" for row in data["results"]))
         self.assertFalse(data["eligibility_verified"])
+
+    def test_discovery_uses_confirmed_context_from_the_authenticated_owner(self):
+        self.supabase.tables["candidate_context"] = [
+            {"user_id": USER_A, "career_text": "Confirmed accounting experience", "career_background": {}},
+            {"user_id": USER_B, "career_text": "OTHER_PRIVATE_CAREER_SENTINEL", "career_background": {}},
+        ]
+        with patch.object(self.discovery, "search", wraps=self.discovery.search) as search:
+            response = self.search()
+        self.assertEqual(response.status_code, 200, response.text)
+        supplied = search.call_args.kwargs["profile"]
+        self.assertEqual(supplied["user_id"], USER_A)
+        self.assertEqual(supplied["career_text"], "Confirmed accounting experience")
+        self.assertNotIn("OTHER_PRIVATE_CAREER_SENTINEL", response.text)
+        self.assertTrue(all("OTHER_PRIVATE_CAREER_SENTINEL" not in str(request.url) for request in self.feeds.requests))
 
     def test_missing_invalid_or_privileged_bearer_never_reaches_preferences_or_feeds(self):
         for auth in ("", "Basic session-a", "Bearer invalid-session", "Bearer " + SETTINGS.publishable_key,

@@ -17,6 +17,11 @@ export type JobPreferences = {
   sponsorship_required: boolean;
   work_authorization_notes: string | null;
   minimum_match_score?: number;
+  discovery_rules?: {
+    remote_country_policy: "review" | "require_explicit";
+    remote_country_codes: string[];
+    sponsorship_policy: "review" | "require_explicit";
+  };
 };
 
 export type BetaJob = {
@@ -34,6 +39,8 @@ export type BetaJob = {
   score?: number | null;
   rationale?: string | null;
   duplicate?: boolean;
+  application_status?: BetaApplication["status"];
+  readiness_unavailable?: "capped_workspace" | "packet_check_failed";
   eligibility_review?: {
     status: "eligible" | "ineligible" | "unknown";
     reason: string;
@@ -52,6 +59,9 @@ export type BetaApplication = {
   applied_at: string | null;
   updated_at: string;
   notes?: string | null;
+  recorded_status?: BetaApplication["status"];
+  readiness?: BetaReadiness;
+  readiness_unavailable?: "capped_workspace" | "packet_check_failed";
 };
 
 export type BetaResume = {
@@ -62,6 +72,20 @@ export type BetaArtifact = {
   id: string; job_id: string; resume_id: string | null; kind: string;
   filename: string; mime_type: string; byte_size: number; created_at: string;
 };
+export type BetaPacket = {
+  key: string; run_id: string; resume_id: string; variant: string; format: "pdf" | "docx";
+  generated_at: string; current: boolean; issue: string | null;
+  context_fingerprint: string; packet_fingerprint: string; source_sha256: string;
+  artifacts: [BetaArtifact & { sha256: string }, BetaArtifact & { sha256: string }];
+};
+export type BetaReadiness = {
+  user_id: string; job_id: string; version: "packet-v1"; packets: BetaPacket[];
+  review: { id: string; run_id: string; resume_artifact_id: string; letter_artifact_id: string;
+    packet_fingerprint: string; reviewed_at: string; current: boolean } | null;
+  ready: boolean; reason: string | null; pending_questions: number;
+  application_status: BetaApplication["status"]; recorded_status: BetaApplication["status"] | null;
+  application_id: string | null;
+};
 export type BetaQuestion = {
   id: string; job_id: string | null; prompt: string; answer: string | null;
   status: string; remember: boolean;
@@ -70,5 +94,5 @@ export type BetaWorkspace = {
   profile: BetaProfile | null; preferences: JobPreferences | null;
   jobs: BetaJob[]; applications: BetaApplication[]; resumes: BetaResume[];
   artifacts: BetaArtifact[]; questions: BetaQuestion[];
-  capabilities: { job_detail_fetch?: boolean; bootstrap_list_limit?: number };
+  capabilities: { job_detail_fetch?: boolean; bootstrap_list_limit?: number; packet_readiness?: string };
 };

@@ -51,6 +51,12 @@ from .account_privacy import (EmptyRequest, ErasureRequest, account_status,
     request_export, request_erasure, download_export)
 from .profile_store import save_profile as save_atomic_profile
 from .discovery import DiscoveryConfig, DiscoveryError, DiscoverySearchRequest, DiscoveryService
+from .release import public_release
+from .observability import WorkflowTelemetry
+from .readiness import (PacketReviewRequest, capture_preparation_context,
+    bind_preparation_context, packet_readiness, review_packet, project_application_state)
+from .document_review import (DocumentReviewError, validated_document_review,
+    validated_saved_document_review)
 
 PDF_MIME = "application/pdf"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -288,7 +294,7 @@ async def build_context(repo: MobileRepository, studio: Any, *, job_id: Optional
         resume = defaults[0] if defaults else None
     resume_text = ""
     if resume:
-        content = await repo.download("resumes", resume["storage_path"], max_bytes=MAX_RESUME_BYTES)
+        content = await repo.download("resumes", resume["storage_path"], max_bytes=MAX_RESUME_BYTES, fresh=True)
         resume_text = await extract_text(studio, content, resume["original_filename"])
     # "Remember" controls durable answer memory, not whether a user's answer can
     # resolve this application. Transient profile answers never enter job context.
@@ -438,6 +444,13 @@ def model_metadata(result: Any) -> dict:
         value = raw.get(key)
         if type(value) is int and 0 <= value <= 10_000_000:
             metadata[key] = value
+    if raw.get("rubric_reason_code") == "rubric_contract_invalid":
+        metadata["rubric_reason_code"] = "rubric_contract_invalid"
+        for key, minimum, maximum in (("rubric_rejected_count", 1, 12),
+                                      ("rubric_unresolved_requirement_count", 0, 100)):
+            value = raw.get(key)
+            if type(value) is int and minimum <= value <= maximum:
+                metadata[key] = value
     return metadata
 
 
@@ -515,6 +528,7 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
 
     application = FastAPI(title="Job Pursuit Mobile API", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     application.add_middleware(BoundedBodyMiddleware)
+    application.add_middleware(WorkflowTelemetry)
     application.state.studio = studio
     application.state.discovery = discovery
     application.state.billing = billing
@@ -530,7 +544,8 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
 
     @application.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        return JSONResponse({"detail": "The mobile service could not complete the request."}, status_code=500, headers={"Cache-Control": "no-store"})
+        request_id = request.scope.get("jobpursuit_request_id", "")
+        return JSONResponse({"detail": "The mobile service could not complete the request.", "request_id": request_id}, status_code=500, headers={"Cache-Control": "no-store", "X-Request-ID": request_id})
 
     async def authenticated_repository(request: Request):
         application.state.pre_auth_limits.check(request)
@@ -583,6 +598,10 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
     async def health() -> dict:
         return {"status": "ok", "service": "job-pursuit-mobile"}
 
+    @application.get("/api/mobile/version")
+    async def version() -> dict:
+        return public_release()
+
     @application.get("/api/mobile/account")
     async def get_account(repo: MobileRepository = Depends(privacy_repository)) -> dict:
         return await account_status(repo)
@@ -606,7 +625,11 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
             if application.state.discovery is None:
                 application.state.discovery = DiscoveryService(DiscoveryConfig.from_env())
             preferences = await repo.one("job_preferences", required=False)
-            result = await application.state.discovery.search(user_id=repo.user_id, preferences=preferences, request=body)
+            profile, career = await asyncio.gather(repo.one("profiles", required=False), repo.one("candidate_context", required=False))
+            if profile is not None:
+                profile = {**profile, "career_text": (career or {}).get("career_text"),
+                           "career_background": saved_background((career or {}).get("career_background"))}
+            result = await application.state.discovery.search(user_id=repo.user_id, preferences=preferences, request=body, profile=profile)
             if result["status"] == "unavailable":
                 return JSONResponse({**result, "detail": {"code": "sources_unavailable",
                     "message": "The configured job sources are unavailable. Retry later; no jobs were saved."}}, status_code=503)
@@ -620,6 +643,9 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
             from .billing import BillingService
             application.state.billing = BillingService.from_env()
         return application.state.billing
+
+    from .billing_customer import customer_billing_router
+    application.include_router(customer_billing_router(billing_service, invited_repository))
 
     @application.get("/api/mobile/billing")
     async def billing_status(repo: MobileRepository = Depends(invited_repository)) -> dict:
@@ -674,9 +700,57 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
         if profile is not None:
             profile["career_text"] = (career or {}).get("career_text")
             profile["career_background"] = saved_background((career or {}).get("career_background"))
+        if len(jobs) >= 200 or len(applications) >= 200:
+            # Preserve the shared capped-list guard; a partial list cannot prove Ready.
+            jobs, applications = await project_application_state(repo, jobs, applications)
+        else:
+            # Validate the complete owner-filtered lists before isolating optional
+            # readiness reads. These temporary drafts are a read projection only;
+            # neither stored receipts nor external submission history are changed.
+            projected_jobs, projected_apps = await project_application_state(repo, jobs, [
+                {**row, "status": "draft", "recorded_status": "ready"} if row["status"] == "ready" else row
+                for row in applications
+            ])
+            jobs_by_id = {row["id"]: row for row in projected_jobs}
+            apps_by_id = {row["id"]: row for row in projected_apps}
+            original_jobs = {row["id"]: row for row in jobs}
+            limit = asyncio.Semaphore(4)
+
+            async def check_ready(row):
+                job = original_jobs.get(row["job_id"])
+                async with limit:
+                    return await project_application_state(repo, [job] if job else [], [row])
+
+            async def project_ready(row):
+                try:
+                    # Include semaphore queue time: optional readiness work must
+                    # not consume the browser's entire 15-second bootstrap budget.
+                    return await asyncio.wait_for(check_ready(row), timeout=5)
+                except asyncio.TimeoutError:
+                    pass
+                except HTTPException as exc:
+                    # Never mask authentication/authorization errors, invalid
+                    # aggregate data, or action failures. An unavailable or
+                    # untrusted per-role check supplies no readiness authority.
+                    if not (exc.status_code == 429 or (exc.status_code == 503
+                            and isinstance(exc.detail, dict)
+                            and exc.detail.get("code") == "readiness_unavailable")):
+                        raise
+                unavailable_app = {**apps_by_id[row["id"]], "readiness_unavailable": "packet_check_failed"}
+                job = jobs_by_id.get(row["job_id"])
+                unavailable_job = {**job, "readiness_unavailable": "packet_check_failed"} if job else None
+                return ([unavailable_job] if unavailable_job else []), [unavailable_app]
+
+            projections = await asyncio.gather(*(project_ready(row) for row in applications if row["status"] == "ready"))
+            for checked_jobs, checked_apps in projections:
+                jobs_by_id.update((row["id"], row) for row in checked_jobs)
+                apps_by_id.update((row["id"], row) for row in checked_apps)
+            jobs = [jobs_by_id[row["id"]] for row in jobs]
+            applications = [apps_by_id[row["id"]] for row in applications]
         return {"profile": profile, "preferences": preferences, "jobs": jobs, "resumes": resumes,
                 "artifacts": artifacts, "applications": applications, "questions": questions,
                 "capabilities": {"manual_job_import": True, "job_url_fetch": False, "job_detail_fetch": True,
+                    "discovery": "profile_rules_v1", "discovery_automatic_on_open": True,
                     "eligibility_review": "job_scoped_user_self_report",
                     "document_variants": ["role_aligned", "career_change", "sse", "fde"],
                     "default_document_variant": "role_aligned", "career_background_self_reported": True,
@@ -693,7 +767,14 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
 
     @application.put("/api/mobile/preferences")
     async def save_preferences(body: PreferencesUpdate, repo: MobileRepository = Depends(repository)) -> dict:
-        return first_row(await repo.insert("job_preferences", body.model_dump(mode="json"), conflict="user_id"))
+        data = body.model_dump(mode="json")
+        if "discovery_rules" not in body.model_fields_set:
+            # Older native clients must not reset newer hard constraints.
+            data.pop("discovery_rules")
+            previous = await repo.one("job_preferences", required=False)
+            if not body.sponsorship_required and (previous or {}).get("discovery_rules", {}).get("sponsorship_policy") == "require_explicit":
+                raise HTTPException(422, "Your saved discovery rules require explicit sponsorship. Review those rules in the web preferences before turning off sponsorship.")
+        return first_row(await repo.insert("job_preferences", data, conflict="user_id"))
 
     @application.post("/api/mobile/jobs")
     async def import_job(body: JobCreate, response: Response, repo: MobileRepository = Depends(repository)) -> dict:
@@ -740,8 +821,18 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
     @application.get("/api/mobile/jobs/{job_id}")
     async def job_detail(job_id: UUID, repo: MobileRepository = Depends(repository)) -> dict:
         job = first_row(await jobs_with_scores(repo, str(job_id)))
+        projected, _ = await project_application_state(repo, [job], await repo.list("applications", filters={"job_id": "eq." + str(job_id)}))
+        job = projected[0]
         review = decode_review(await repo.one("mobile_answers", review_id(repo.user_id, str(job_id)), required=False), job, repo.user_id)
         return {**job, "eligibility_status": review["status"] if review else "unknown", "eligibility_review": review}
+
+    @application.get("/api/mobile/jobs/{job_id}/readiness")
+    async def current_readiness(job_id: UUID, repo: MobileRepository = Depends(repository)) -> dict:
+        return await packet_readiness(repo, str(job_id))
+
+    @application.post("/api/mobile/jobs/{job_id}/review-packet")
+    async def save_packet_review(job_id: UUID, body: PacketReviewRequest, repo: MobileRepository = Depends(repository)) -> dict:
+        return await review_packet(repo, str(job_id), body)
 
     @application.post("/api/mobile/jobs/{job_id}/eligibility")
     async def review_eligibility(job_id: UUID, body: EligibilityReview, repo: MobileRepository = Depends(repository)) -> dict:
@@ -817,6 +908,8 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
 
     @application.post("/api/mobile/applications")
     async def save_application(body: ApplicationCreate, repo: MobileRepository = Depends(repository)) -> dict:
+        if body.status == "ready":
+            raise HTTPException(422, "Review the current document packet in Application Studio before marking Ready. A status label alone is not a document review.")
         await repo.one("jobs", str(body.job_id))
         # This only records the explicitly supplied status. No ATS call, submitted
         # timestamp, submission URL, or claim of an actual submission is generated.
@@ -862,19 +955,39 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
                 pass
             raise
 
+    @application.get("/api/mobile/jobs/{job_id}/document-reviews")
+    async def document_reviews(job_id: UUID, repo: MobileRepository = Depends(repository)) -> dict:
+        await repo.one("jobs", str(job_id))
+        runs = await repo.list("model_runs", filters={"job_id": "eq." + str(job_id),
+            "operation": "eq.prepare_documents", "status": "eq.succeeded"}, limit=20)
+        reviews, unavailable_count = [], 0
+        for run in runs:
+            summary = run.get("output_summary")
+            try:
+                review = validated_saved_document_review(summary.get("document_review") if isinstance(summary, dict) else None)
+            except DocumentReviewError:
+                unavailable_count += 1
+                continue
+            reviews.append({"model_run_id": run["id"], "created_at": run.get("completed_at") or run.get("created_at"), "review": review})
+        return {"reviews": reviews, "unavailable_count": unavailable_count,
+            "limit": 20, "possibly_truncated": len(runs) == 20}
+
     @application.post("/api/mobile/jobs/{job_id}/prepare")
     async def prepare(job_id: UUID, body: PrepareRequest, repo: MobileRepository = Depends(repository)) -> dict:
         async with application.state.limits.work(repo.user_id, "ai"):
             adapter = studio_module(application)
+            snapshot = await capture_preparation_context(repo, str(job_id), str(body.resume_id))
             context = await build_context(repo, adapter, job_id=str(job_id), resume_id=str(body.resume_id))
             model_run = await start_run(repo, "prepare_documents", context, str(body.resume_id), variant=body.variant)
             artifacts, documents, questions = [], [], []
             all_persisted = False
             try:
+                await bind_preparation_context(repo, model_run["id"], str(body.resume_id), body.variant, snapshot)
                 await reserve_ai_usage(repo, "prepare")
                 raw_documents = await run_in_threadpool(adapter.prepare_documents, context, body.variant)
                 metadata = model_metadata(raw_documents)
                 documents = validate_documents(raw_documents)
+                document_review = validated_document_review(raw_documents)
                 questions = await persist_questions(repo, str(job_id), getattr(raw_documents, "questions", []))
                 for document in documents:
                     artifact_id = str(uuid4())
@@ -890,8 +1003,10 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
                     "output_summary": {"artifact_ids": [row["id"] for row in artifacts], "variant": body.variant,
                         "question_ids": [row["id"] for row in questions],
                         "model_metadata": metadata,
+                        "document_review": document_review,
                         "documents": [{"artifact_id": row["id"], "sha256": hashlib.sha256(doc["content"]).hexdigest()} for row, doc in zip(artifacts, documents)]}})
-                return {"artifacts": artifacts, "questions": questions}
+                return {"artifacts": artifacts, "questions": questions,
+                    "model_run_id": model_run["id"], "document_review": document_review}
             except Exception as exc:
                 if all_persisted:
                     return {"artifacts": artifacts, "questions": questions,

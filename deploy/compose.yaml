@@ -1,0 +1,41 @@
+# Run from an approved Linux host. Secrets are runtime files, never build args.
+# frontend build args below are PUBLIC Supabase client configuration only.
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:?set public Supabase URL}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:?set public publishable key}
+    image: job-pursuit-web:${RELEASE_TAG:-candidate}
+    env_file: /etc/job-pursuit/web.env
+    restart: unless-stopped
+    ports: ["127.0.0.1:8843:8843"]
+    read_only: true
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  privacy:
+    image: job-pursuit-web:${RELEASE_TAG:-candidate}
+    env_file: /etc/job-pursuit/privacy.env
+    # A new process each minute bounds retained memory and picks up queue work.
+    command: ["/bin/sh", "-c", "while :; do python scripts/privacy_worker.py --execute; sleep 60; done"]
+    healthcheck: {disable: true}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

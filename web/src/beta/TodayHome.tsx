@@ -20,14 +20,14 @@ export function TodayHome({ profile, jobs, applications, onNavigate, onOpenJob }
     <header className="pursuit-page-heading">
       <p className="beta-eyebrow">{new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(new Date())}</p>
       <h1>Your next move, {name}.</h1>
-      <p>Prepare for roles you add. You choose where to apply.</p>
+      <p>Find relevant roles, prepare a stronger application, and keep your next steps together.</p>
     </header>
     <div className="pursuit-home-grid">
       <section className="pursuit-focus" aria-labelledby="pursuit-focus-title">
         <p className="beta-eyebrow">Your focus</p>
-        <h2 id="pursuit-focus-title">A stronger story<br />starts with you.</h2>
-        <p>Keep your source resume and career details together. Give every application a clear starting point.</p>
-        <button className="pursuit-focus-action" onClick={() => onNavigate("studio")}>Open your studio <WorkspaceIcon name="arrow" /></button>
+        <h2 id="pursuit-focus-title">Your next role<br />starts here.</h2>
+        <p>Discover checks selected employer boards against your saved preferences and reviewed career facts. No AI credits are used for discovery.</p>
+        <button className="pursuit-focus-action" onClick={() => onNavigate("discover")}>Find roles for me <WorkspaceIcon name="arrow" /></button>
       </section>
       <div className="pursuit-home-side">
         <div className="pursuit-metrics">
@@ -47,7 +47,7 @@ export function TodayHome({ profile, jobs, applications, onNavigate, onOpenJob }
       {roles.length ? <div className="pursuit-opportunities">{roles.slice(0, 2).map(job => <button className="pursuit-opportunity" key={job.id} onClick={() => onOpenJob(job)}>
         <div className="pursuit-company"><span className="pursuit-company-mark" aria-hidden="true">{job.company_name.slice(0, 2).toUpperCase()}</span><span><strong>{job.company_name}</strong><small>{job.location_text || "Location not listed"}</small></span><WorkspaceIcon name="arrow" /></div>
         <h3>{job.title}</h3><span className="pursuit-chip">{job.eligibility_status === "eligible" ? "Eligibility recorded" : "Eligibility to verify"}</span>
-      </button>)}</div> : <div className="beta-empty"><h3>Start with one promising role</h3><p>Add an employer posting in Discover. Your saved roles will appear here.</p><button className="beta-secondary" onClick={() => onNavigate("discover")}>Add your first role</button></div>}
+      </button>)}</div> : <div className="beta-empty"><h3>Find your first promising role</h3><p>Open Discover to find recommendations. Save a role to review its fit and prepare your application.</p><button className="beta-secondary" onClick={() => onNavigate("discover")}>Explore recommendations</button></div>}
     </section>
   </section>;
 }

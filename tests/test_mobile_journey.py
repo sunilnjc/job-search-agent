@@ -337,8 +337,13 @@ class Journey:
         self.check(all(r.url.host == "mobile.example.test" for r in self.supabase.requests), "all Supabase calls in memory")
         for request in self.supabase.requests:
             if request.url.path.startswith("/rest/v1/rpc/"):
-                self.check(request.url.path.rsplit("/", 1)[-1] in {"mobile_check_access", "mobile_reserve_ai_usage", "mobile_save_profile"}, "allowlisted owner RPC")
-                self.check("user_id" not in json.loads(request.content), "RPC ownership derived from authenticated identity")
+                self.check(request.url.path.rsplit("/", 1)[-1] in {
+                    "mobile_check_access", "mobile_reserve_ai_usage", "mobile_save_profile",
+                    "mobile_packet_context", "mobile_bind_packet_context",
+                    "mobile_packet_readiness", "mobile_review_packet",
+                }, "allowlisted owner RPC")
+                self.check(not any("user" in key for key in json.loads(request.content)),
+                           "RPC ownership derived from authenticated identity")
             elif request.url.path.startswith("/rest/v1/"):
                 user = TOKENS[request.headers["authorization"].removeprefix("Bearer ")]
                 self.check(request.url.params.get("user_id") == "eq." + user, "REST tenant filter")
@@ -378,12 +383,16 @@ class MobileJourneyTests(unittest.TestCase):
         with Journey(lambda: provider) as journey:
             journey.setup_inputs(confirm=False)
             response = journey.request("POST", f"jobs/{journey.job['id']}/prepare", json={"resume_id": journey.resume["id"]})
-            self.assertEqual(response.status_code, 422)
-            self.assertTrue(response.json()["detail"]["questions"])
+            # A source upload is not confirmed career evidence. Context capture
+            # now rejects it before creating a generation or reserving AI usage.
+            self.assertEqual(response.status_code, 409)
+            self.assertIn("Confirmed career facts", response.json()["detail"])
             self.assertEqual(provider.operations, [])
             self.assertEqual(journey.supabase.tables["artifacts"], [])
             self.assertFalse(any(bucket == "application-artifacts" for bucket, _ in journey.supabase.objects))
-            self.assertEqual(journey.supabase.tables["model_runs"][0]["status"], "failed")
+            self.assertEqual(journey.supabase.tables["model_runs"], [])
+            self.assertFalse(any(request.url.path.endswith(("/mobile_reserve_ai_usage", "/mobile_bind_packet_context"))
+                                 for request in journey.supabase.requests))
 
     def test_partial_artifact_storage_failure_retains_confirmed_outputs_and_recovery_record(self):
         provider = DeterministicProvider()
@@ -414,25 +423,74 @@ class MobileJourneyTests(unittest.TestCase):
             self.assertEqual(journey.supabase.tables["model_runs"][0]["status"], "failed")
             self.assertIn(("resumes", journey.resume["storage_path"]), journey.supabase.objects)
 
-    def test_invalid_rank_rubric_fails_without_saving_a_zero_score(self):
+    def test_invalid_rank_rubric_saves_unresolved_review_but_invalid_claims_still_fail(self):
         class InvalidRubric(DeterministicProvider):
-            def complete(self, **kwargs):
-                output = json.loads(super().complete(**kwargs))
-                # Schema-valid, but incorrectly upgrades an unstated requirement.
-                output["requirements"][0]["importance"] = "required"
-                return json.dumps(output)
+            fabricate_claim = False
+
+            def complete(self, *, payload, **kwargs):
+                self.operations.append(payload["operation"])
+                assert payload["operation"] == "rank"
+                assert FOREIGN_MARKER not in json.dumps(payload)
+                # Ranking-only fixture: no source document/export is needed.
+                # Exact candidate claims remain independently validated; only
+                # the comparison upgrades an unstated requirement and names an
+                # unsupported credential which must never enter saved output.
+                claim_text = "Managed a hospital team of 50." if self.fabricate_claim else CAREER_LINES[1]
+                return json.dumps({
+                    "score": 8.0, "recommendation": "strong_match", "questions": [],
+                    "claims": [{"text": claim_text, "source_ids": ["career_text.1"]}],
+                    "requirements": [{
+                        "requirement": {"text": JOB["description"].splitlines()[0], "source_ids": ["job.requirements.0"]},
+                        "importance": "required", "category": "transferable_skill",
+                        "credential_name": "MODEL_ONLY_UNSUPPORTED_CERTIFICATE", "jurisdiction": "",
+                        "candidate_source_ids": ["career_text.1"], "assessment": "supported",
+                    }],
+                })
 
         provider = InvalidRubric()
         with Journey(lambda: provider) as journey:
-            journey.setup_inputs()
-            response = journey.request("POST", f"jobs/{journey.job['id']}/rank", json={"resume_id": journey.resume["id"]})
-            self.assertEqual(response.status_code, 422)
-            self.assertEqual(journey.supabase.tables["job_scores"], [])
+            job = journey.expect("POST", "jobs", 201, label="ranking-only synthetic role", json=JOB).json()
+            journey.expect("PUT", "profile", label="confirmed ranking profile", json=PROFILE)
+            journey.expect("POST", f"jobs/{job['id']}/eligibility", label="synthetic job-specific eligibility", json={
+                "status": "eligible", "reason": "Explicit synthetic permission for this posting, not qualification clearance.",
+                "confirmed": True})
+            path = f"jobs/{job['id']}/rank"
+            response = journey.request("POST", path, json={})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["status"], "new")
+            self.assertEqual(len(journey.supabase.tables["job_scores"]), 1)
+            score = journey.supabase.tables["job_scores"][0]
+            self.assertEqual((score["score"], score["recommendation"]), (8.0, "review"))
+            self.assertIn(CAREER_LINES[1], score["rationale"])
+            self.assertIn("numeric fit estimate is unvalidated", score["rationale"])
+            self.assertNotIn("Literal credential match is supported", score["rationale"])
             audit = journey.supabase.tables["model_runs"][0]
-            self.assertEqual(audit["status"], "failed")
-            self.assertEqual(audit["output_summary"]["model_metadata"]["input_tokens"], 123)
-            self.assertTrue(response.json()["detail"]["questions"])
+            self.assertEqual(audit["status"], "succeeded")
+            summary = audit["output_summary"]
+            self.assertEqual(summary["job_score_id"], score["id"])
+            self.assertEqual(summary["recommendation"], "review")
+            metadata = summary["model_metadata"]
+            self.assertEqual(metadata["input_tokens"], 123)
+            self.assertEqual(metadata["rubric_reason_code"], "rubric_contract_invalid")
+            self.assertEqual(metadata["rubric_rejected_count"], 1)
+            self.assertEqual(metadata["rubric_unresolved_requirement_count"], 0)
+            questions = journey.supabase.tables["mobile_questions"]
+            self.assertTrue(questions)
+            self.assertEqual(set(summary["question_ids"]), {row["id"] for row in questions})
+            self.assertTrue(all(row["status"] == "pending" and row["job_id"] == job["id"] for row in questions))
+            self.assertTrue(any("actual mandatory requirements" in row["prompt"] for row in questions))
+            self.assertNotIn("MODEL_ONLY_UNSUPPORTED_CERTIFICATE", json.dumps(journey.supabase.tables))
+            self.assertEqual(journey.supabase.tables["artifacts"], [])
             self.assertEqual(provider.operations, ["rank"])
+            # Recovery must not loosen the separate candidate-claim contract.
+            previous = copy.deepcopy(journey.supabase.tables["job_scores"])
+            provider.fabricate_claim = True
+            rejected = journey.request("POST", path, json={})
+            self.assertEqual(rejected.status_code, 422)
+            self.assertEqual(journey.supabase.tables["job_scores"], previous)
+            self.assertEqual(journey.supabase.tables["model_runs"][-1]["status"], "failed")
+            self.assertNotIn("Managed a hospital team of 50", rejected.text + json.dumps(journey.supabase.tables))
+            self.assertEqual(provider.operations, ["rank", "rank"])
 
     def test_unvalidated_legacy_fallback_cannot_replace_an_existing_score(self):
         with Journey(DeterministicProvider) as journey:

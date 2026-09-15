@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkedDiscoveryResponse, discoveryRequest, discoverySavePayload } from "../src/beta/discovery.ts";
+import { checkedDiscoveryResponse, discoveryContextKey, discoveryRequest, discoverySavePayload, reusableDiscovery } from "../src/beta/discovery.ts";
 import { createMobileTransport } from "../src/beta/mobileTransport.ts";
 const job = {
   source_id: "ats_" + "a".repeat(64), source: "greenhouse:clinic", provider: "greenhouse", board: "clinic", external_id: "1",
@@ -13,6 +13,22 @@ const source = { source: job.source, status: "ok", cached: true, fetched_at: job
   received_count: 1, returned_count: 1, dropped_count: 0, unlisted_count: 0, duplicate_count: 0 };
 const result = { status: "ok", results: [job], sources: [source], partial: false, truncated: false, matched_count: 1, returned_count: 1, searched_at: job.fetched_at, persisted: false, eligibility_verified: false };
 const session = { user: { id: "fixture-user" }, access_token: "fixture-token" };
+
+test("recommendations cache is owner/profile/preference-scoped and expires in five minutes", () => {
+  const profile = { user_id: "a", career_text: "Confirmed finance experience", career_background: null };
+  const preferences = { target_titles: ["Finance Manager"], preferred_locations: ["Dubai"], preferred_regions: [], remote_preference: "open", sponsorship_required: false };
+  const key = discoveryContextKey("a", profile, preferences);
+  const snapshot = { key, result, receivedAt: 1000 };
+  assert.equal(reusableDiscovery(snapshot, key, 2000), result);
+  for (const other of [discoveryContextKey("b", profile, preferences), discoveryContextKey("a", {...profile, career_text:"Confirmed nursing experience"}, preferences), discoveryContextKey("a", profile, {...preferences, remote_preference:"remote_only"})]) assert.equal(reusableDiscovery(snapshot, other, 2000), null);
+  assert.equal(reusableDiscovery(snapshot, key, 301000), null);
+  assert.equal(reusableDiscovery(snapshot, key, 999), null);
+});
+test("profile relevance is validated and is never converted to verified eligibility", () => {
+  const relevance = {method:"profile_rules_v1", score:60, reasons:["Accounting experience appears in this role"], gaps:["Licence needs review"], review_required:true};
+  assert.equal(checkedDiscoveryResponse({...result, results:[{...job, relevance}]}).results[0].eligibility_status, "unknown");
+  for (const changed of [{...relevance,score:101}, {...relevance,score:NaN}, {...relevance,method:"AI_verified"}, {...relevance,gaps:[{html:"unsafe"}]}]) assert.throws(() => checkedDiscoveryResponse({...result, results:[{...job,relevance:changed}]}));
+});
 
 test("empty additional filters defer to server-owned saved preferences without sending profile data", () => {
   assert.deepEqual(discoveryRequest("", "", "", "any"), { query: "", filters: { titles: [], locations: [], workplace_type: "any" }, limit: 20 });

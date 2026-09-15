@@ -28,7 +28,7 @@ def text_of(content,filename):
     if filename.endswith('.pdf'):return '\n'.join(p.extract_text() or '' for p in PdfReader(io.BytesIO(content)).pages)
     return '\n'.join(p.text for p in Document(io.BytesIO(content)).paragraphs)
 
-def evaluate(p,live=False):
+def evaluate(p,live=False,output_dir=OUT):
     result={'persona':p['id'],'boundary':'real API/extractor/studio; in-memory Supabase','live_ai':live,'checks':{}}
     boundary=LiveBoundary() if live else None
     start=time.monotonic()
@@ -62,7 +62,7 @@ def evaluate(p,live=False):
                 if prepared.status_code!=200:result['prepare']['error']=prepared.json()
                 for artifact in prepared.json().get('artifacts',[]):
                     response=j.request('GET',f"artifacts/{artifact['id']}/download")
-                    path=OUT/(p['id']+'-'+artifact['kind']+Path(artifact['filename']).suffix)
+                    path=output_dir/(p['id']+'-'+artifact['kind']+Path(artifact['filename']).suffix)
                     path.write_bytes(response.content)
                     text=text_of(response.content,path.name)
                     result['prepare']['artifacts'].append({'kind':artifact['kind'],'format':path.suffix,'download_status':response.status_code,'path':str(path.relative_to(ROOT)),'text':text,'source_ids':artifact.get('source_ids',[])})
@@ -77,13 +77,24 @@ def evaluate(p,live=False):
     return result
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--live',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--live',action='store_true')
+    parser.add_argument('--output-dir', type=Path, default=OUT)
+    parser.add_argument('--persona', action='append', choices=sorted(LIVE_IDS))
+    args=parser.parse_args()
     logging.disable(logging.CRITICAL)
-    OUT.mkdir(parents=True,exist_ok=True)
+    output_dir=args.output_dir.resolve()
+    if not output_dir.is_relative_to(ROOT/'docs/testing/evidence'):
+        parser.error('Use a folder under docs/testing/evidence; no external destination is allowed.')
+    if output_dir.exists() and any(output_dir.iterdir()):
+        parser.error('Choose a new evidence folder to preserve previous test results.')
+    output_dir.mkdir(parents=True,exist_ok=True)
     results=[]
     for p in json.loads((ROOT/'tests/fixtures/resumes/personas.json').read_text()):
-        result=evaluate(p,live=args.live and p['id'] in LIVE_IDS);results.append(result)
-        (OUT/'results.json').write_text(json.dumps(results,indent=2,ensure_ascii=False)+'\n')
+        if args.persona and p['id'] not in args.persona:continue
+        result=evaluate(p,live=args.live and p['id'] in LIVE_IDS,output_dir=output_dir);results.append(result)
+        (output_dir/'results.json').write_text(json.dumps(results,indent=2,ensure_ascii=False)+'\n')
         print(p['id'],json.dumps({k:v for k,v in result['checks'].items() if k not in {'facts_found','facts_missing'}}),'missing facts',len(result['checks'].get('facts_missing',[])),'AI',result.get('prepare',{}).get('status','not called'),flush=True)
+    return 0 if all(not r.get('error_type') and (not r['live_ai'] or (r.get('rank',{}).get('status')==200 and r.get('prepare',{}).get('status')==200)) for r in results) else 1
 
-if __name__=='__main__':main()
+if __name__=='__main__':raise SystemExit(main())

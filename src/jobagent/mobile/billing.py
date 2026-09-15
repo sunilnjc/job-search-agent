@@ -2,13 +2,14 @@
 
 Checkout/portal take a remotely verified repository identity. Erasure takes ONLY
 trusted UUIDs from the durable account-worker claim, never a public route body.
-Stripe test mode is an explicitly documented implementation inference, not a
-commercial/provider decision. Checkout defaults OFF. No environment switch can
-substitute a fake or enable live payments. Import/configuration performs no I/O.
+Checkout defaults OFF. Live mode requires separate credentials/catalog, explicit
+reviewed activation and a second database gate. No runtime fake is selectable.
+Import/configuration performs no I/O; tests inject only offline transports.
 """
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import hmac
 import json
 import os
@@ -75,9 +76,12 @@ class Plan:
     price_id: str
     period_limit: int
     daily_limit: int
+    display_name: str = ""
 
     def __post_init__(self):
         if (not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", self.price_id)
+                or not isinstance(self.display_name, str) or len(self.display_name) > 80
+                or any(ord(c) < 32 for c in self.display_name)
                 or any(type(value) is not int or not 0 < value <= MAX_UNITS
                        for value in (self.period_limit, self.daily_limit))):
             raise ValueError("Invalid server billing plan")
@@ -92,13 +96,16 @@ class BillingSettings:
     success_url: str = ""
     cancel_url: str = ""
     portal_return_url: str = ""
+    live_activation_approved: bool = False
 
     def __post_init__(self):
-        if (self.mode != "test" or type(self.checkout_enabled) is not bool
+        if (self.mode not in ("test", "live") or type(self.checkout_enabled) is not bool
+                or type(self.live_activation_approved) is not bool
+                or (self.mode == "live" and not self.live_activation_approved)
                 or (self.provider and not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", self.provider))
                 or len(self.plans) > 50 or len({plan.price_id for plan in self.plans.values()}) != len(self.plans)
                 or any(not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", key) for key in self.plans)):
-            raise ValueError("Invalid billing configuration; live billing is not implemented")
+            raise ValueError("Invalid or unapproved billing configuration")
         if self.checkout_enabled and (not self.provider or not self.plans or
                 not all(_https(url) for url in (self.success_url, self.cancel_url, self.portal_return_url))):
             raise ValueError("Checkout needs a complete reviewed server configuration")
@@ -107,21 +114,26 @@ class BillingSettings:
     def from_env(cls):
         """Read only explicit billing variables, never dotenv or founder config."""
         try:
-            raw = os.environ.get("MOBILE_BILLING_PLANS", "{}")
+            mode = os.environ.get("MOBILE_BILLING_MODE", "test")
+            prefix = "MOBILE_BILLING_LIVE_" if mode == "live" else "MOBILE_BILLING_"
+            approved = os.environ.get("MOBILE_BILLING_LIVE_ACTIVATION_APPROVED", "false")
+            if approved not in ("true", "false"):
+                raise ValueError
+            raw = os.environ.get(prefix + "PLANS", "{}")
             if len(raw) > 16384:
                 raise ValueError
             catalog = _json(raw.encode())
             if not isinstance(catalog, dict):
                 raise ValueError
-            enabled = os.environ.get("MOBILE_BILLING_CHECKOUT_ENABLED", "false")
+            enabled = os.environ.get(prefix + "CHECKOUT_ENABLED", "false")
             if enabled not in ("true", "false"):
                 raise ValueError
             return cls(provider=os.environ.get("MOBILE_BILLING_PROVIDER", ""),
-                       mode=os.environ.get("MOBILE_BILLING_MODE", "test"), checkout_enabled=enabled == "true",
+                       mode=mode, checkout_enabled=enabled == "true", live_activation_approved=approved == "true",
                        plans={key: Plan(**value) for key, value in catalog.items()},
-                       success_url=os.environ.get("MOBILE_BILLING_SUCCESS_URL", ""),
-                       cancel_url=os.environ.get("MOBILE_BILLING_CANCEL_URL", ""),
-                       portal_return_url=os.environ.get("MOBILE_BILLING_PORTAL_RETURN_URL", ""))
+                       success_url=os.environ.get(prefix + "SUCCESS_URL", ""),
+                       cancel_url=os.environ.get(prefix + "CANCEL_URL", ""),
+                       portal_return_url=os.environ.get(prefix + "PORTAL_RETURN_URL", ""))
         except (ValueError, TypeError, AttributeError, RecursionError):
             raise unavailable() from None
 
@@ -189,6 +201,7 @@ class BillingProvider(Protocol):
                               settings: BillingSettings, operation: dict) -> dict: ...
     async def create_portal(self, customer_id: str, return_url: str) -> dict: ...
     async def fetch_subscription(self, customer_id: str) -> SubscriptionSnapshot: ...
+    async def price_details(self, price_id: str) -> dict: ...
     async def cancel_for_erasure(self, account: dict, operations: list, request_id: str) -> CancellationReceipt: ...
 
 
@@ -269,7 +282,7 @@ def verify_stripe_signature(raw: bytes, signature: str, secret: str, *, now: Opt
 
 
 class StripeTestProvider:
-    """Pinned, test-only, card/one-licensed-price adapter. No live-mode path.
+    """Pinned test adapter; a separately approved subclass implements live mode.
 
     No automatic retries, customer search, metadata-based membership, refunds,
     invoice payments, or price/account creation. Unsupported billing structures
@@ -282,7 +295,8 @@ class StripeTestProvider:
 
     def __init__(self, secret_key: str, webhook_secret: str, *, portal_configuration: str = "",
                  transport=None, clock=time.time):
-        if (not isinstance(secret_key, str) or not re.fullmatch(r"sk_test_[A-Za-z0-9]{8,512}", secret_key)
+        if (self.mode not in ("test", "live") or not isinstance(secret_key, str)
+                or not re.fullmatch("sk_" + self.mode + r"_[A-Za-z0-9]{8,512}", secret_key)
                 or not isinstance(webhook_secret, str) or not re.fullmatch(r"whsec_[A-Za-z0-9]{8,512}", webhook_secret)
                 or (portal_configuration and not re.fullmatch(r"bpc_[A-Za-z0-9]{1,160}", portal_configuration))):
             raise unavailable()
@@ -290,9 +304,10 @@ class StripeTestProvider:
         self.http = PinnedProviderHTTP(origin="https://api.stripe.com", transport=transport,
             headers={"Authorization": "Bearer " + secret_key, "Stripe-Version": self.api_version},
             allowed_routes=(("POST", r"/v1/customers"), ("GET", r"/v1/customers/cus_[A-Za-z0-9]+"),
+                ("GET", r"/v1/prices/price_[A-Za-z0-9]+"),
                 ("POST", r"/v1/checkout/sessions"), ("GET", r"/v1/checkout/sessions"),
-                ("GET", r"/v1/checkout/sessions/cs_test_[A-Za-z0-9]+"),
-                ("POST", r"/v1/checkout/sessions/cs_test_[A-Za-z0-9]+/expire"),
+                ("GET", r"/v1/checkout/sessions/cs_" + self.mode + r"_[A-Za-z0-9]+"),
+                ("POST", r"/v1/checkout/sessions/cs_" + self.mode + r"_[A-Za-z0-9]+/expire"),
                 ("GET", r"/v1/billing_portal/configurations/bpc_[A-Za-z0-9]+"),
                 ("POST", r"/v1/billing_portal/sessions"),
                 ("GET", r"/v1/subscriptions"), ("GET", r"/v1/subscriptions/sub_[A-Za-z0-9]+"),
@@ -314,9 +329,8 @@ class StripeTestProvider:
             raise unavailable()
         return value
 
-    @staticmethod
-    def _object(value, kind, *, customer=None, object_id=None):
-        if (not isinstance(value, dict) or value.get("object") != kind or value.get("livemode") is not False
+    def _object(self, value, kind, *, customer=None, object_id=None):
+        if (not isinstance(value, dict) or value.get("object") != kind or value.get("livemode") is not (self.mode == "live")
                 or (customer is not None and value.get("customer") != customer)
                 or (object_id is not None and value.get("id") != object_id)):
             raise unavailable()
@@ -324,9 +338,9 @@ class StripeTestProvider:
 
     def verify_webhook(self, raw, signature, now):
         body = verify_stripe_signature(raw, signature, self._webhook_secret, now=now)
-        if (body.get("object") != "event" or body.get("livemode") is not False
+        if (body.get("object") != "event" or body.get("livemode") is not (self.mode == "live")
                 or body.get("api_version") != self.api_version or body.get("account") is not None):
-            raise HTTPException(400, "A pinned-version, test-mode platform billing event is required.")
+            raise HTTPException(400, "A pinned-version, matching-mode platform billing event is required.")
         event_type = body.get("type")
         accepted = {"customer.subscription." + action for action in
                     ("created", "updated", "deleted", "paused", "resumed", "pending_update_applied", "pending_update_expired")}
@@ -374,7 +388,7 @@ class StripeTestProvider:
         customer_id = self._id(customer_id, "cus_")
         operation_id = self._operation(operation, self.clock)
         if operation.get("state") == "complete":
-            session_id = self._id(operation.get("object_id"), "cs_test_")
+            session_id = self._id(operation.get("object_id"), "cs_" + self.mode + "_")
             result = await self.http.request("GET", "/v1/checkout/sessions/" + session_id)
             self._object(result, "checkout.session", customer=customer_id, object_id=session_id)
         else:
@@ -385,22 +399,50 @@ class StripeTestProvider:
                       "success_url": settings.success_url, "cancel_url": settings.cancel_url,
                       "metadata[operation_id]": operation_id})
             self._object(result, "checkout.session", customer=customer_id)
-        self._id(result.get("id"), "cs_test_")
+        self._id(result.get("id"), "cs_" + self.mode + "_")
         if result.get("mode") != "subscription" or result.get("status") != "open":
             raise unavailable()
         return result
 
-    async def create_portal(self, customer_id, return_url):
-        customer_id = self._id(customer_id, "cus_")
+    async def price_details(self, price_id):
+        price_id = self._id(price_id, "price_")
+        price = await self.http.request("GET", "/v1/prices/" + price_id)
+        self._object(price, "price", object_id=price_id)
+        recurring = price.get("recurring")
+        # Launch contract: fixed, positive, two-decimal currencies; no tiers,
+        # metering, currency conversion, custom amounts or ambiguous intervals.
+        if (price.get("active") is not True or price.get("type") != "recurring"
+                or price.get("billing_scheme") != "per_unit" or price.get("transform_quantity")
+                or price.get("custom_unit_amount") or price.get("currency_options")
+                or type(price.get("unit_amount")) is not int or not 0 < price["unit_amount"] <= 99_999_999
+                or price.get("currency") not in ("usd", "eur", "gbp", "aed", "inr", "cad", "aud", "sgd")
+                or not isinstance(recurring, dict) or recurring.get("usage_type") != "licensed"
+                or recurring.get("interval") not in ("month", "year")
+                or type(recurring.get("interval_count")) is not int or recurring["interval_count"] != 1
+                or recurring.get("trial_period_days")):
+            raise unavailable()
+        return {"amount_minor": price["unit_amount"], "currency": price["currency"],
+                "interval": recurring["interval"], "interval_count": 1}
+
+    async def verify_portal_configuration(self):
         configuration = self._id(self._portal_configuration, "bpc_")
         config = await self.http.request("GET", "/v1/billing_portal/configurations/" + configuration)
         self._object(config, "billing_portal.configuration", object_id=configuration)
         # No plan changes/prorations through this launch portal. Operator must
-        # configure the portal in test mode; never silently use provider default.
+        # configure the portal in the matching mode; never use provider default.
         features = config.get("features", {})
         if (config.get("active") is not True or not isinstance(features, dict)
-                or features.get("subscription_update", {}).get("enabled") is not False):
+                or not isinstance(features.get("subscription_update"), dict)
+                or features["subscription_update"].get("enabled") is not False
+                or not isinstance(features.get("subscription_cancel"), dict)
+                or features["subscription_cancel"].get("enabled") is not True
+                or features["subscription_cancel"].get("mode") != "at_period_end"):
             raise unavailable()
+        return configuration
+
+    async def create_portal(self, customer_id, return_url):
+        customer_id = self._id(customer_id, "cus_")
+        configuration = await self.verify_portal_configuration()
         result = await self.http.request("POST", "/v1/billing_portal/sessions",
             data={"customer": customer_id, "configuration": configuration, "return_url": return_url})
         return self._object(result, "billing_portal.session", customer=customer_id)
@@ -446,7 +488,7 @@ class StripeTestProvider:
             return denied
         item = items["data"][0]
         price = item.get("price", {})
-        if (item.get("quantity") != 1 or price.get("livemode") is not False or price.get("type") != "recurring"
+        if (item.get("quantity") != 1 or price.get("livemode") is not (self.mode == "live") or price.get("type") != "recurring"
                 or price.get("recurring", {}).get("usage_type") != "licensed"):
             return denied
         price_id = self._id(price.get("id"), "price_")
@@ -496,7 +538,7 @@ class StripeTestProvider:
             return blocked
         for session in sessions:
             if session.get("status") == "open":
-                session_id = self._id(session["id"], "cs_test_")
+                session_id = self._id(session["id"], "cs_" + self.mode + "_")
                 expired = await self.http.request("POST", "/v1/checkout/sessions/" + session_id + "/expire")
                 self._object(expired, "checkout.session", customer=customer, object_id=session_id)
                 if expired.get("status") != "expired":
@@ -562,6 +604,28 @@ class BillingStore:
         return result
 
 
+class StripeLiveProvider(StripeTestProvider):
+    """Same pinned adapter, separate mode and secrets. Never implicitly selected.
+
+    Passing approval is a deployment decision, not permission to run live tests.
+    Database migration 0014 independently denies live checkout/sync by default.
+    """
+    mode = "live"
+
+    def __init__(self, *args, activation_approved=False, **kwargs):
+        if activation_approved is not True:
+            raise unavailable()
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def from_env(cls, *, transport=None):
+        return cls(os.environ.get("MOBILE_BILLING_STRIPE_LIVE_SECRET_KEY", ""),
+                   os.environ.get("MOBILE_BILLING_STRIPE_LIVE_WEBHOOK_SECRET", ""),
+                   portal_configuration=os.environ.get("MOBILE_BILLING_STRIPE_LIVE_PORTAL_CONFIGURATION", ""),
+                   activation_approved=os.environ.get("MOBILE_BILLING_LIVE_ACTIVATION_APPROVED", "false") == "true",
+                   transport=transport)
+
+
 class BillingService:
     def __init__(self, settings: BillingSettings, store: BillingStore,
                  provider: Optional[BillingProvider] = None, *, clock=time.time):
@@ -571,11 +635,14 @@ class BillingService:
             for plan in settings.plans.values():
                 provider._id(plan.price_id, "price_")
         self.settings, self.store, self.provider, self.clock = settings, store, provider, clock
+        self._plans_cache = None
+        self._plans_lock = None  # Python 3.9 also permits construction before an event loop.
 
     @classmethod
     def from_env(cls, *, transport=None, store_transport=None):
         settings = BillingSettings.from_env()
-        provider = StripeTestProvider.from_env(transport=transport) if settings.provider == "stripe" else None
+        adapter = StripeLiveProvider if settings.mode == "live" else StripeTestProvider
+        provider = adapter.from_env(transport=transport) if settings.provider == "stripe" else None
         return cls(settings, BillingStore.from_env(transport=store_transport), provider)
 
     def _provider(self):
@@ -607,6 +674,11 @@ class BillingService:
         if not isinstance(plan_key, str) or plan_key not in self.settings.plans:
             raise HTTPException(422, "Choose a configured billing plan.")
         user_id, email = self._identity(repo)
+        if isinstance(provider, StripeTestProvider):
+            # Validate the offered price AND a usable cancellation route before
+            # creating even a test customer. No stale pricing-cache reliance.
+            await provider.price_details(self.settings.plans[plan_key].price_id)
+            await provider.verify_portal_configuration()
         account = await self.store.rpc("mobile_billing_begin", p_user_id=user_id,
                                        p_provider=provider.name, p_mode=provider.mode)
         try:
@@ -660,6 +732,57 @@ class BillingService:
             if not _https(result.get("url"), provider.portal_hosts):
                 raise unavailable()
             return {"url": result["url"]}
+        except HTTPException:
+            raise
+        except Exception:
+            raise unavailable() from None
+        finally:
+            await self._release(account)
+
+    async def plans(self) -> dict:
+        capabilities = billing_capabilities(self)
+        if not capabilities["checkout_enabled"]:
+            return {"mode": self.settings.mode, "plans": []}
+        if self._plans_lock is None:
+            self._plans_lock = asyncio.Lock()
+        async with self._plans_lock:
+            if self._plans_cache and 0 <= self.clock() - self._plans_cache[0] < 60:
+                return self._plans_cache[1]
+            provider = self._provider()
+            semaphore = asyncio.Semaphore(4)
+
+            async def read(key, plan):
+                async with semaphore:
+                    details = await provider.price_details(plan.price_id)
+                return {"plan_key": key, "display_name": plan.display_name or key,
+                        **details, "period_limit": plan.period_limit, "daily_limit": plan.daily_limit}
+            result = {"mode": self.settings.mode, "plans": await asyncio.gather(*(
+                read(key, plan) for key, plan in self.settings.plans.items()))}
+            self._plans_cache = (self.clock(), result)
+            return result
+
+    async def reconcile(self, repo) -> dict:
+        """Explicit owner refresh: GET provider proof, never trusts return URLs.
+
+        A durable DB lease/cooldown bounds retries across workers. Reuse the
+        webhook snapshot transaction, including manual grants/quota/erasure
+        fences. No charge, subscription mutation or email is performed here.
+        """
+        user_id, _ = self._identity(repo)
+        provider = self._provider()
+        account = await self.store.rpc("mobile_billing_reconcile_claim", p_user_id=user_id,
+                                       p_provider=provider.name, p_mode=provider.mode)
+        if account.get("status") == "rate_limited":
+            raise HTTPException(429, "Please wait 30 seconds before verifying billing again.",
+                                headers={"Retry-After": "30"})
+        if account.get("status") == "none":
+            return {"status": "none"}
+        try:
+            snapshot = await provider.fetch_subscription(account["customer_id"])
+            result = await self.store.rpc("mobile_billing_apply_snapshot", p_account_id=account["id"],
+                p_lease_token=account["lease_token"], p_event_id=account["event_id"],
+                p_snapshot=self._snapshot(snapshot, account["customer_id"]))
+            return {"status": result["status"]}
         except HTTPException:
             raise
         except Exception:
@@ -788,6 +911,7 @@ def billing_capabilities(service=None) -> dict:
                             (not isinstance(provider, StripeTestProvider) or provider._portal_configuration))
         checkout_ready = bool(settings.checkout_enabled and portal_ready)
         return {**disabled, "provider": provider.name, "mode": provider.mode,
+                "live_activation_approved": settings.live_activation_approved if provider.mode == "live" else False,
                 "checkout_enabled": checkout_ready, "portal_enabled": portal_ready,
                 "plan_keys": sorted(settings.plans) if checkout_ready else [], "configuration_ready": True}
     except Exception:

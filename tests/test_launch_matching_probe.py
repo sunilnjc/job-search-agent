@@ -42,7 +42,7 @@ with patch.dict(os.environ, {}, clear=True), patch("dotenv.load_dotenv"):
     from jobagent.profile import answers
     from jobagent.sources.ats_boards import ATSBoardsSource
     from jobagent.storage import db
-    from test_mobile_api import FakeSupabase, SETTINGS
+    from test_mobile_api import FakeSupabase, SETTINGS, USER_A
     from mobile_journey_check import output_diagnostics
 
 
@@ -423,7 +423,7 @@ class MatchingLaunchProbe(unittest.TestCase):
         self.assertEqual(diagnostics["nonverbatim_claim_count"], 0)
         self.assertNotIn("profile.email", offered)
 
-    def test_27_missing_nmc_is_review_but_invalid_rubric_is_validation_error(self):
+    def test_27_missing_nmc_and_rejected_rubrics_persist_unresolved_review(self):
         context = candidate_context("Current UK NMC registration mandatory.")
         context["career_text"] = "Philippine nursing licence self-reported current. No UK NMC registration."
         payload, _ = studio._context(context)
@@ -439,13 +439,49 @@ class MatchingLaunchProbe(unittest.TestCase):
             raw = materialize_selection(json.dumps(output), payload, studio._RankOutput.model_json_schema())
             diagnostics = output_diagnostics(raw, payload)
             with patch.object(studio, "_provider", return_value=SelectionProvider(output)):
-                try:
-                    result = studio.rank_job(context)
-                    outcome = {"recommendation": result["recommendation"], "questions": result.questions}
-                except studio.MissingFactsError as error:
-                    outcome = {"error": "MissingFactsError", "questions": error.questions}
-            actual[label] = {"diagnostics": diagnostics, "outcome": outcome}
-        self.evidence("M27", "Missing credential yields review; category/name mismatches reject independently of grounding", actual)
+                result = studio.rank_job(context)
+            # Exercise actual API persistence too: a successful draft/rank is
+            # not evidence that the rejected comparison became valid.
+            fake, client = self.mobile_client()
+            fake.auth_emails[USER_A] = {"email": "alex.synthetic@example.test",
+                                       "email_confirmed_at": "2026-09-01T00:00:00Z"}
+            fake.add("candidate_context", career_text=context["career_text"])
+            job = fake.job(description=context["job"]["description"])
+            confirmed = client.post("/api/mobile/jobs/" + job["id"] + "/eligibility", json={
+                "status": "eligible", "confirmed": True,
+                "reason": "Synthetic explicit work-rights confirmation; not nursing registration."})
+            self.assertEqual(confirmed.status_code, 200)
+            with patch.object(studio, "_provider", return_value=SelectionProvider(output)):
+                response = client.post("/api/mobile/jobs/" + job["id"] + "/rank")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(fake.tables["job_scores"]), 1)
+            saved = fake.tables["job_scores"][0]
+            audit = fake.tables["model_runs"][0]
+            metadata = audit["output_summary"]["model_metadata"]
+            questions = fake.tables["mobile_questions"]
+            self.assertEqual((saved["score"], saved["recommendation"]), (9.0, "review"))
+            self.assertEqual(response.json()["status"], "new")
+            self.assertEqual(audit["status"], "succeeded")
+            self.assertEqual(audit["output_summary"]["job_score_id"], saved["id"])
+            self.assertEqual(set(audit["output_summary"]["question_ids"]), {q["id"] for q in questions})
+            self.assertTrue(questions)
+            self.assertTrue(all(q["status"] == "pending" and q["job_id"] == job["id"] for q in questions))
+            self.assertIn("Current UK NMC registration mandatory", " ".join(q["prompt"] for q in questions))
+            self.assertIn(context["career_text"], saved["rationale"])
+            self.assertNotIn("Literal credential match is supported", saved["rationale"])
+            self.assertNotIn("NMC licence", json.dumps({"response": response.json(), "audit": audit, "questions": questions}))
+            if label == "literal_missing":
+                self.assertNotIn("rubric_reason_code", metadata)
+            else:
+                self.assertEqual(metadata["rubric_reason_code"], "rubric_contract_invalid")
+                self.assertEqual(metadata["rubric_rejected_count"], 1)
+                self.assertEqual(metadata["rubric_unresolved_requirement_count"], 1)
+                self.assertIn("numeric fit estimate is unvalidated", saved["rationale"])
+            actual[label] = {"diagnostics": diagnostics,
+                             "outcome": {"recommendation": result["recommendation"], "questions": result.questions},
+                             "api_status": response.status_code, "saved_metadata": metadata,
+                             "saved_recommendation": saved["recommendation"]}
+        self.evidence("M27", "Rejected comparisons remain invalid; grounded facts and unresolved review persist without invented registration", actual)
         for label in actual:
             self.assertTrue(actual[label]["diagnostics"]["schema_valid"])
             self.assertTrue(actual[label]["diagnostics"]["claims_valid"])
@@ -453,7 +489,8 @@ class MatchingLaunchProbe(unittest.TestCase):
         self.assertEqual(actual["literal_missing"]["outcome"]["recommendation"], "review")
         for label in ("wrong_category", "nonliteral_name"):
             self.assertFalse(actual[label]["diagnostics"]["rubric_valid"])
-            self.assertEqual(actual[label]["outcome"]["error"], "MissingFactsError")
+            self.assertEqual(actual[label]["outcome"]["recommendation"], "review")
+            self.assertEqual(actual[label]["saved_metadata"]["rubric_reason_code"], "rubric_contract_invalid")
 
 
 def deny_private_file_access(event, args):

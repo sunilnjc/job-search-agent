@@ -25,6 +25,10 @@ _EXCEPTION_TYPES = frozenset({
     "PdfReadError", "PdfStreamError", "RecursionError", "MemoryError", "CancelledError",
 })
 _METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"})
+_WORKFLOWS = frozenset({"discovery", "bootstrap", "resume_upload", "resume_parse", "assessment",
+    "document_generation", "chat", "billing_webhook", "billing_checkout", "billing_portal",
+    "privacy_export", "privacy_erasure", "document_download", "workspace"})
+_WORKFLOW_FORMAT = "workflow_request operation=%s method=%s status=%s duration_ms=%s request_id=%s"
 _EVENTS = {
     "Telegram-triggered drafting failed for job %s": "drafting_failed",
     "Failed to handle Telegram update": "telegram_update_failed",
@@ -93,6 +97,17 @@ class PrivacyFilter(logging.Filter):
         elif isinstance(record.msg, str) and record.msg in _EVENTS:
             event = _EVENTS[record.msg]
         message = "event=" + event
+        if name == "jobagent.mobile.workflow" and record.msg == _WORKFLOW_FORMAT:
+            args = record.args
+            if isinstance(args, tuple) and len(args) == 5:
+                operation, method, status, duration, request_id = args
+                if (isinstance(operation, str) and operation in _WORKFLOWS
+                        and isinstance(method, str) and method in _METHODS | {"OTHER"}
+                        and type(status) is int and 100 <= status <= 599
+                        and type(duration) is int and 0 <= duration <= 86400000
+                        and isinstance(request_id, str) and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", request_id)):
+                    message = (f"event=workflow_request operation={operation} method={method}"
+                               f" status={status} duration_ms={duration} request_id={request_id}")
         if name == "uvicorn.access":
             # Uvicorn normally formats client/method/full_path/version/status.
             # Preserve only method/status; no URL path, query, peer IP or headers.

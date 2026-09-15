@@ -18,7 +18,7 @@ def main():
     print(f"Artifacts: {artifacts}", flush=True)
     (artifacts / "Sources").mkdir()
     (artifacts / "Tests").mkdir()
-    for name in ("Models.swift", "Networking.swift", "StorageRecovery.swift", "AppStore.swift", "PreviewRecoveryService.swift"):
+    for name in ("Models.swift", "Networking.swift", "StorageRecovery.swift", "AppStore.swift", "PreviewRecoveryService.swift", "DiscoverySearch.swift"):
         (artifacts / "Sources" / name).symlink_to(PROJECT / "Sources" / name)
     for source in (PROJECT / "Tests").glob("*.swift"):
         (artifacts / "Tests" / source.name).symlink_to(source)
