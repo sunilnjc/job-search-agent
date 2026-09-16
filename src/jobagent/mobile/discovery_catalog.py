@@ -20,7 +20,10 @@ DEFAULT_PUBLIC_BOARDS = (
 # Routing tags describe observed board coverage, NOT an employer eligibility
 # promise. No candidate text is incorporated into a URL or sent to an employer.
 # Keep the catalog finite to bound the per-worker public cache and lock table.
-MAX_CATALOG_BOARDS = 24
+# A search still fetches at most eight feeds (select_public_boards clamps the
+# limit); a larger catalog widens what the router can choose from, which is what
+# stops a UAE/Europe search from returning the same two boards every time.
+MAX_CATALOG_BOARDS = 56
 
 # provider, board, observed profession tags, observed country codes
 REVIEWED_PUBLIC_CATALOG = (
@@ -44,6 +47,37 @@ REVIEWED_PUBLIC_CATALOG = (
     ("greenhouse", "welbehealth", ("nursing", "healthcare", "operations"), ("US",)),
     ("lever", "includedhealth", ("nursing", "healthcare", "finance", "software"), ("US",)),
     ("greenhouse", "akunacapital", ("software", "data", "finance", "entry"), ("US", "CN", "SG")),
+    # Verified live on 2026-09-16: each board answered its provider's public
+    # endpoint with a non-empty posting list. Slugs that 404'd or returned an
+    # empty list are deliberately absent; a dead slug degrades every search it
+    # is routed into. Tags are observed coverage, never an eligibility promise.
+    ("greenhouse", "stripe", ("software", "product", "finance", "data", "design", "commercial", "legal"), ("US", "GB", "IE", "SG", "IN")),
+    ("greenhouse", "databricks", ("software", "data", "product", "commercial", "entry"), ("US", "GB", "DE", "IN", "SG")),
+    ("greenhouse", "anthropic", ("software", "data", "research", "product", "design", "legal"), ("US", "GB")),
+    ("greenhouse", "datadog", ("software", "data", "product", "security", "commercial"), ("US", "FR", "IE", "ES", "JP")),
+    ("greenhouse", "cloudflare", ("software", "security", "product", "data", "commercial"), ("US", "GB", "PT", "SG", "AU")),
+    ("greenhouse", "coinbase", ("software", "finance", "security", "data", "product", "legal"), ("US", "GB", "IE", "IN")),
+    ("greenhouse", "gitlab", ("software", "product", "security", "commercial", "operations"), ("US", "GB", "DE", "NL", "IN")),
+    ("greenhouse", "affirm", ("software", "finance", "data", "product", "commercial"), ("US", "CA", "ES", "PL")),
+    ("greenhouse", "brex", ("software", "finance", "product", "data", "commercial"), ("US", "CA", "IN")),
+    ("greenhouse", "samsara", ("software", "data", "product", "commercial", "operations"), ("US", "GB", "MX")),
+    ("greenhouse", "figma", ("design", "software", "product", "commercial"), ("US", "GB", "JP")),
+    ("greenhouse", "airbnb", ("software", "product", "data", "design", "commercial", "legal"), ("US", "GB", "IE", "IN")),
+    ("greenhouse", "pinterest", ("software", "product", "data", "design", "commercial"), ("US", "GB", "IE", "MX")),
+    ("greenhouse", "reddit", ("software", "product", "data", "design", "commercial"), ("US", "GB", "CA", "IE")),
+    ("greenhouse", "lyft", ("software", "product", "data", "design", "operations"), ("US", "CA", "MX")),
+    ("greenhouse", "instacart", ("software", "product", "data", "commercial", "operations"), ("US", "CA")),
+    ("greenhouse", "flexport", ("operations", "software", "product", "commercial", "finance"), ("US", "NL", "CN", "SG")),
+    ("greenhouse", "twilio", ("software", "product", "data", "commercial", "security"), ("US", "GB", "IE", "IN", "SG")),
+    ("greenhouse", "robinhood", ("software", "finance", "data", "product", "security"), ("US", "GB", "CA")),
+    ("greenhouse", "asana", ("software", "product", "design", "commercial", "data"), ("US", "GB", "DE", "JP")),
+    ("greenhouse", "dropbox", ("software", "product", "data", "design", "commercial"), ("US", "IE", "PL")),
+    ("greenhouse", "sofi", ("finance", "software", "data", "product", "commercial"), ("US",)),
+    ("greenhouse", "wise", ("finance", "software", "product", "data", "commercial"), ("GB", "EE", "HU", "SG", "AE")),
+    ("ashby", "openai", ("software", "research", "data", "product", "design", "legal"), ("US", "GB", "IE", "JP", "SG")),
+    ("ashby", "notion", ("software", "product", "design", "commercial", "data"), ("US", "GB", "IE", "JP")),
+    ("ashby", "ramp", ("finance", "software", "product", "data", "commercial"), ("US", "CA", "GB")),
+    ("ashby", "vanta", ("security", "software", "product", "commercial", "legal"), ("US", "GB", "IE")),
 )
 
 
@@ -69,11 +103,24 @@ def select_public_boards(*, interests: frozenset[str], countries: frozenset[str]
         score = 20 * overlap
         if overlap and "entry" in interests and "entry" in tags:
             score += 12
+        # Geography must be able to reorder boards that tie on profession,
+        # otherwise a UAE/Europe search keeps returning whichever boards were
+        # reviewed first. Still worth less than a profession match, so it can
+        # never pull an unrelated profession ahead of a relevant one.
         if overlap and countries & set(locations):
-            score += 4
-        # Listed order is reviewed and deterministic; no rotation that makes
-        # zero results disappear on retry, and no request-specific data retained.
-        return -score, REVIEWED_PUBLIC_CATALOG.index(entry)
+            score += 14
+        # A board tagged for many professions matches everything, so it must not
+        # outrank a specialist purely by breadth. Without this, boards reviewed
+        # first won every tie and a later catalog entry was never reachable.
+        # Breadth is only a tie-break: a board concentrated in a requested
+        # country stays ahead of a broader one, so asking for Germany still
+        # surfaces the German board first.
+        focus = len(countries & set(locations)) / len(locations) if locations else 0
+        specificity = (-round(focus * 4), -min(len(tags), 8))
+        # Review order is the last resort only, so the catalog stays deterministic
+        # (no rotation that makes results disappear on retry, no request data
+        # retained) without letting the boards reviewed first win every tie.
+        return (-score, *specificity, REVIEWED_PUBLIC_CATALOG.index(entry))
 
     ordered = sorted(REVIEWED_PUBLIC_CATALOG, key=priority)
     return tuple((provider, name) for provider, name, _, _ in ordered[:limit])
