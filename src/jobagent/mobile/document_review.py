@@ -10,6 +10,8 @@ import hashlib
 import json
 import re
 from datetime import datetime, timedelta
+
+from .moments import parse_moment
 from uuid import UUID
 
 VERSION = "document-review-v1"
@@ -80,7 +82,7 @@ def validated_saved_document_review(value) -> dict:
         _fail()
     try:
         generation = UUID(snapshot["generation_id"])
-        captured = datetime.fromisoformat(snapshot["captured_at"].replace("Z", "+00:00"))
+        captured = parse_moment(snapshot["captured_at"])
         if str(generation) != snapshot["generation_id"] or generation.version != 4 or captured.utcoffset() != timedelta(0):
             _fail()
     except (TypeError, ValueError, AttributeError):
