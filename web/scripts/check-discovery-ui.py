@@ -33,6 +33,12 @@ def discovery_context(browser, width=390, scheme="light", *, profession="Registe
         "content_truncated": True, "fetched_at": STAMP, "source_updated_at": STAMP, "source_published_at": None, "source_created_at": None,
         "match_reasons": ["Matches stored target title.", "Matches stored location/region."], "eligibility_status": "unknown", "persisted": False,
         "eligibility": {"status": "unknown", "provisional": True, "independently_verified": False, "review_required": True, "reasons": ["Work authorisation and qualifications need review.", "Posting text is truncated; check the original."]},
+        # Ranked overlap drives the heading chip. The provisional note is the
+        # last gap and must be rendered once per page, never under every card.
+        "relevance": {"method": "profile_rules_v1", "score": 72, "review_required": True,
+            "reasons": ["Title matches a saved target role; a target is a preference, not proof of experience."],
+            "gaps": ["Explicit requirement needs job-specific evidence review: Five years of practice.",
+                     "Eligibility and qualifications remain provisional and are not independently verified."]},
     }
     source = {"source": job["source"], "status": "partial", "cached": True, "fetched_at": STAMP, "checked_at": STAMP, "received_count": 3, "returned_count": 1, "dropped_count": 1, "unlisted_count": 0, "duplicate_count": 1, "truncated": True, "error_code": None, "retry_after": 0}
     failed = {**source, "source": "lever:second-fixture-board", "status": "error", "fetched_at": None, "cached": False, "received_count": 0, "returned_count": 0, "dropped_count": 0, "duplicate_count": 0, "truncated": False, "error_code": "timeout", "retry_after": 60}
@@ -132,7 +138,14 @@ def main():
             assert state["searches"] == [{"query": "", "filters": {"titles": [], "locations": [], "workplace_type": "any"}, "limit": 20}]
             assert not state["saves"]
             expect(page.get_by_text("Partial coverage:", exact=False)).to_be_visible()
-            expect(page.get_by_text("Eligibility unknown · review required", exact=True)).to_be_visible()
+            # The heading describes measured overlap, not an eligibility verdict.
+            expect(page.get_by_text("Strong title + experience overlap", exact=True)).to_be_visible()
+            assert page.get_by_text("Eligibility unknown · review required", exact=True).count() == 0, \
+                "A constant badge on every card carries no information"
+            # The provisional wording belongs once on the page, not per card.
+            provisional = "Eligibility and qualifications remain provisional and are not independently verified."
+            assert page.get_by_text(provisional, exact=False).count() == 1, \
+                "Provisional wording must appear once per page, not under every role"
             page.get_by_text("Review posting and provisional reasons", exact=True).click()
             expect(page.locator(".discovery-description")).to_contain_text("<script>")
             assert page.evaluate("window.discoveryInjection") is None

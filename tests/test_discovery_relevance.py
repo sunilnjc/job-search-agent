@@ -239,5 +239,47 @@ class RelevanceTests(unittest.TestCase):
                 profile_evidence(saved)
 
 
+class PostingSegmentationTests(unittest.TestCase):
+    """Bullets shown to a customer must be whole sentences, not feed fragments."""
+
+    def score(self, row, saved, **kwargs):
+        return relevance(row, profile_evidence(saved), **kwargs)
+
+    def test_a_bullet_broken_across_feed_lines_is_rejoined_not_shown_in_halves(self):
+        # Boards emit <br> inside one bullet; each half used to be its own "gap".
+        saved = profile("Backend Engineer", "senior")
+        result = self.score(job("Senior Backend Engineer", "Requirements:\n"
+            "Can think about how data will pass through your software\n"
+            "from persistent storage through to API endpoint\n"), saved)
+        gaps = " ".join(result["gaps"])
+        self.assertIn("your software from persistent storage through to API endpoint", gaps)
+        self.assertNotIn("Explicit requirement needs job-specific evidence review: from persistent", gaps)
+
+    def test_section_headings_set_context_without_becoming_requirements(self):
+        saved = profile("Backend Engineer", "senior")
+        result = self.score(job("Senior Backend Engineer",
+            "This role will be a great fit if you:\nHave hands-on experience designing data flow\n"), saved)
+        serialized = json.dumps(result)
+        self.assertNotIn("great fit if you", serialized)
+        self.assertIn("hands-on experience designing data flow", " ".join(result["gaps"]))
+
+    def test_colon_headings_from_real_boards_do_not_leak_as_gaps(self):
+        saved = profile("Backend Engineer", "senior")
+        result = self.score(job("Senior Backend Engineer", "In This Role, You Will:\n"
+            "Do discovery, design, develop and maintain software.\n"
+            "What You Need to Be Successful:\nSound understanding of microservice architecture\n"), saved)
+        for heading in ("In This Role", "What You Need to Be Successful"):
+            self.assertNotIn(heading, json.dumps(result))
+
+    def test_generic_industry_words_are_not_presented_as_career_evidence(self):
+        saved = profile("Backend Engineer", "senior", "Built Python PostgreSQL services with design reviews.")
+        result = self.score(job("Senior Backend Engineer", "Python PostgreSQL services design reviews."), saved)
+        overlap = next(r for r in result["reasons"] if "mentions terms" in r)
+        for signal in ("postgresql", "python"):
+            self.assertIn(signal, overlap)
+        for noise in ("design", "reviews", "services"):
+            self.assertNotIn(noise, overlap)
+
+
 if __name__ == "__main__":
     unittest.main()

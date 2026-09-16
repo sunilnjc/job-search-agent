@@ -89,6 +89,29 @@ class CatalogSelectionTests(unittest.TestCase):
             self.assertFalse(is_open_role_title(title), title)
         self.assertTrue(is_open_role_title("Senior Backend Engineer, Future Products"))
 
+    def test_catalog_growth_is_reachable_not_shadowed_by_review_order(self):
+        """A board added after the first review must be selectable.
+
+        Ranking used to fall back to catalog position on every tie, so later
+        entries were never routed to and enlarging the catalog changed nothing.
+        """
+        original = {name for _, name, _, _ in REVIEWED_PUBLIC_CATALOG[:20]}
+        added = {name for _, name, _, _ in REVIEWED_PUBLIC_CATALOG[20:]}
+        self.assertTrue(added, "catalog has no post-review entries to check")
+        reached = set()
+        for titles, countries in ((["Security Engineer"], {"GB"}), (["Finance Manager"], {"GB", "AE"}),
+                                  (["Product Designer"], {"US", "GB"}), (["Senior Backend Engineer"], {"AE", "DE"})):
+            selected = select_public_boards(interests=discovery_interests(titles), countries=frozenset(countries))
+            self.assertEqual(len(selected), 8)
+            reached.update(name for _, name in selected)
+        self.assertTrue(reached & added, "later catalog entries are unreachable by routing")
+        self.assertTrue(reached & original, "routing must still reach the originally reviewed boards")
+
+    def test_requested_country_outranks_breadth_so_local_boards_lead(self):
+        german = select_public_boards(interests=discovery_interests(["Senior Backend Engineer"]),
+                                      countries=frozenset({"DE"}))
+        self.assertIn(("greenhouse", "n26"), german[:3])
+
     def test_malformed_catalog_cannot_enlarge_worker_cache(self):
         enlarged = tuple(("lever", f"synthetic-{i}", (), ()) for i in range(MAX_CATALOG_BOARDS + 1))
         with patch.object(d, "REVIEWED_PUBLIC_CATALOG", enlarged), self.assertRaises(d.DiscoveryError):

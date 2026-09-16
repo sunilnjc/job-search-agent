@@ -39,6 +39,19 @@ _ALIASES = (
 _ROLE_NOUNS = frozenset("engineer developer nurse teacher educator accountant analyst designer recruiter counsel lawyer therapist physician pharmacist technician consultant manager director supervisor coordinator specialist researcher officer associate mechanic electrician plumber chef cook driver architect assistant backend frontend fullstack".split())
 _LEVEL_WORDS = frozenset("senior junior sr jr entry mid intern internship graduate principal lead".split())
 _STOP = frozenset("a an and are as at be been by can for from has have i in into is it my of on or our that the their this to was were will with work worked working experience experienced years year skills using built including team teams responsibilities requirements required preferred knowledge ability strong good excellent candidate candidates role job company you your we us they seeking looking".split())
+# Words that appear in almost every posting in a field, so sharing them with a
+# posting tells the reader nothing. Listing "design, reviews, services" as the
+# evidence a role was surfaced reads as filler and invites justified mistrust.
+# These are excluded from the shown overlap only; they remain ordinary text for
+# title matching, requirement wording and credential checks.
+_GENERIC = frozenset("""
+software engineer engineering developer development develop developing design designs designing
+review reviews reviewing service services system systems platform platforms product products project projects
+data code coding build building built deliver delivery deliverables tool tools technical technology technologies
+business customer customers client clients user users stakeholder stakeholders process processes solution solutions
+support supporting maintain maintaining implement implementing collaborate collaboration communication
+environment environments quality best practices practice modern scalable robust complex cross functional
+""".split())
 _UNSUPPORTED = re.compile(r"\b(?:no|not|never|without|lack\w*|unknown|unconfirmed|unverified|aspir\w*|wish\w*|want\w*|hope\w*|interested|learning|studying|plan(?:ning)?|seeking|pursu\w*|transition\w*|switch\w*)\b", re.I)
 _CREDENTIAL = re.compile(r"\b(?:licen[cs](?:e[ds]?|ure)|registration|certificat(?:e|ion)s?|certified|degree(?!\s+of\s+(?:autonomy|freedom|ownership|responsibility|independence|flexibility|complexity)\b)|diploma|bachelor'?s?|master'?s?|phd|rn|cpa|acca|cfa|bls|acls|nmc)\b", re.I)
 _HARD = re.compile(r"\b(?:required|requirements?|must|mandatory|essential|prerequisite)\b", re.I)
@@ -228,26 +241,71 @@ def profile_evidence(profile: Optional[dict]) -> ProfileEvidence:
     return ProfileEvidence(profession, background.experience_level, frozenset(terms), tuple(roles[:30]), qualifications)
 
 
+def _segments(description: str):
+    """Yield whole posting bullets, rejoining lines a feed broke mid-sentence.
+
+    Boards emit <br> inside a single bullet, so splitting on newlines shatters
+    one requirement into fragments ("...data will pass through your software" /
+    "from persistent storage through to API endpoint") and each fragment is then
+    shown as its own requirement. A line opening lower-case continues the
+    previous one; a blank line always ends a bullet.
+    """
+    buffer = ""
+    for raw in description.splitlines():
+        line = " ".join(raw.split()).strip(" \t-•*·")
+        if not line:
+            if buffer:
+                yield buffer
+            buffer = ""
+            continue
+        if buffer and line[:1].islower():
+            buffer += " " + line
+            continue
+        if buffer:
+            yield buffer
+        buffer = line
+    if buffer:
+        yield buffer
+
+
+# A section heading introduces the bullets after it; it is never itself a
+# requirement. Feeds write these both bare ("Requirements") and colon-terminated
+# ("What You Need to Be Successful:", "This role will be a great fit if you:"),
+# and the colon form used to survive as a gap because the colon was stripped
+# before the heading was recognized.
+_REQUIRED_HEADING = re.compile(r"(?:(?:minimum|basic|mandatory|essential) )?(?:requirements|qualifications|what you bring|what you'?l*l? need|what you need to be successful|who you are|background(?: (?:&|and) skills)?|skills|(?:this )?role will be a great fit if you)", re.I)
+_OPTIONAL_HEADING = re.compile(r"(?:(?:preferred|optional|desirable)(?: qualifications| requirements)?|nice.to.have(?:s)?|bonus(?: points)?)", re.I)
+_NEUTRAL_HEADING = re.compile(r"(?:responsibilities|benefits|about us|about the (?:role|team|opportunity)|what we offer|what you'?l*l? do|in this role(?:, you will)?|traits|perks)", re.I)
+# Each heading pattern is a single group, so alternating them cannot change the
+# precedence of the branches inside any one of them.
+_ANY_HEADING = re.compile("|".join((_REQUIRED_HEADING.pattern, _OPTIONAL_HEADING.pattern, _NEUTRAL_HEADING.pattern)), re.I)
+# Split only at a semicolon or a sentence end followed by a new sentence, so an
+# abbreviation or a decimal inside one bullet cannot cut it in half.
+_CLAUSES = re.compile(r";\s*|(?<=[.!?])\s+(?=[A-Z])")
+
+
 def _requirements(description: str):
     context = "unknown"
-    for raw in re.split(r"[\n;.!?]+", description):
-        clause = " ".join(raw.split()).strip(" :-•")
-        if not clause:
+    for segment in _segments(description):
+        heading = segment[:-1].strip() if segment.endswith(":") else segment
+        if segment.endswith(":") or _ANY_HEADING.fullmatch(heading):
+            context = ("required" if _REQUIRED_HEADING.fullmatch(heading)
+                       else "optional" if _OPTIONAL_HEADING.fullmatch(heading)
+                       else "unknown")
             continue
-        if re.fullmatch(r"(?:minimum |basic |mandatory |essential )?(?:requirements|qualifications|what you bring|what you'll need)", clause, re.I):
-            context = "required"
-            continue
-        if re.fullmatch(r"(?:preferred|optional|desirable)(?: qualifications| requirements)?|nice.to.have(?:s)?|bonus(?: points)?", clause, re.I):
-            context = "optional"
-            continue
-        if re.fullmatch(r"responsibilities|benefits|about us|what we offer|what you'll do", clause, re.I):
-            context = "unknown"
-            continue
-        optional = _OPTIONAL.search(clause)
-        hard = _HARD.search(_OPTIONAL.sub("", clause))
-        importance = "unknown" if optional and hard else "optional" if optional else "required" if hard else context
-        if importance != "unknown" or _CREDENTIAL.search(clause):
-            yield clause[:240], importance
+        for raw in _CLAUSES.split(segment):
+            clause = " ".join(raw.split()).strip(" :-•")
+            if clause:
+                yield from _classify(clause, context)
+
+
+def _classify(clause: str, context: str):
+    """Importance of one clause; wording in the clause outranks its section."""
+    optional = _OPTIONAL.search(clause)
+    hard = _HARD.search(_OPTIONAL.sub("", clause))
+    importance = "unknown" if optional and hard else "optional" if optional else "required" if hard else context
+    if importance != "unknown" or _CREDENTIAL.search(clause):
+        yield clause[:240], importance
 
 
 def relevance(job: dict, evidence: ProfileEvidence, *, target_titles: Optional[list[str]] = None,
@@ -300,7 +358,7 @@ def relevance(job: dict, evidence: ProfileEvidence, *, target_titles: Optional[l
         gaps.append("Posting title does not establish seniority; years and responsibilities require review.")
     # Description repetition cannot overpower role/level evidence; it contributes
     # at most twelve points and never turns an unrelated title into a role match.
-    overlap = sorted(evidence.career_terms & (words(description) - _STOP))
+    overlap = sorted(evidence.career_terms & (words(description) - _STOP) - _GENERIC)
     if overlap and (aligned or not (evidence.profession or evidence.career_roles)):
         score += 2 * min(len(overlap), 6)
         reasons.append("Posting also mentions terms in your confirmed career text: " + ", ".join(overlap[:6]) + ". This is wording overlap, not verified proficiency.")

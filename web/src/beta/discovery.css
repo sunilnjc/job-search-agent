@@ -14,6 +14,11 @@
 .discovery-preferences dt { font-size: .875rem; color: var(--beta-muted); }
 .discovery-preferences dd { margin: 0; }
 .discovery-chip { display: inline-block; border: 1px solid var(--beta-border); border-radius: 99px; padding: 4px 10px; font-size: .8rem; font-weight: 500; }
+/* Ranked overlap, not an eligibility or hiring signal: the palette stays
+   informational and never reads as approve/reject. */
+.discovery-strength-strong { border-color: var(--beta-accent, #2f6f4f); color: var(--beta-accent, #2f6f4f); }
+.discovery-strength-partial { color: var(--beta-text); }
+.discovery-strength-weak { color: var(--beta-muted); }
 .discovery-result-heading h3 { margin: 14px 0 8px; }
 .discovery-description { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; padding: 14px; border: 1px solid var(--beta-border); border-radius: 12px; }
 .discovery-sources > ul { list-style: none; padding: 0; }
