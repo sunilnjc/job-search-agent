@@ -293,11 +293,30 @@ class StripeTestProvider:
     """
     name, mode = "stripe", "test"
     api_version = "2024-06-20"
+    # Requests are always sent pinned. Stripe may still stamp a DELIVERED event
+    # with the account's default version even when the endpoint object reports a
+    # pin, so accept only explicitly reviewed delivery versions from config.
+    default_webhook_api_versions = (api_version,)
     checkout_hosts, portal_hosts = ("checkout.stripe.com",), ("billing.stripe.com",)
     terminal = ("canceled", "incomplete_expired")
 
+    @classmethod
+    def _webhook_versions(cls, raw: str) -> Tuple[str, ...]:
+        """Reviewed delivery versions only; never an 'accept anything' switch."""
+        if not raw:
+            return cls.default_webhook_api_versions
+        values = [item.strip() for item in raw.split(",") if item.strip()]
+        if not 0 < len(values) <= 4 or any(
+                not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:\.[a-z]{1,32})?", item) for item in values):
+            raise ValueError("Invalid reviewed billing webhook API versions")
+        return tuple(dict.fromkeys([cls.api_version, *values]))
+
     def __init__(self, secret_key: str, webhook_secret: str, *, portal_configuration: str = "",
-                 transport=None, clock=time.time):
+                 transport=None, clock=time.time, webhook_api_versions: str = ""):
+        try:
+            self._webhook_api_versions = self._webhook_versions(webhook_api_versions)
+        except ValueError:
+            raise unavailable() from None
         if (self.mode not in ("test", "live") or not isinstance(secret_key, str)
                 or not re.fullmatch("sk_" + self.mode + r"_[A-Za-z0-9]{8,512}", secret_key)
                 or not isinstance(webhook_secret, str) or not re.fullmatch(r"whsec_[A-Za-z0-9]{8,512}", webhook_secret)
@@ -324,6 +343,7 @@ class StripeTestProvider:
         return cls(os.environ.get("MOBILE_BILLING_STRIPE_SECRET_KEY", ""),
                    os.environ.get("MOBILE_BILLING_STRIPE_WEBHOOK_SECRET", ""),
                    portal_configuration=os.environ.get("MOBILE_BILLING_STRIPE_PORTAL_CONFIGURATION", ""),
+                   webhook_api_versions=os.environ.get("MOBILE_BILLING_STRIPE_WEBHOOK_API_VERSIONS", ""),
                    transport=transport)
 
     @staticmethod
@@ -342,7 +362,7 @@ class StripeTestProvider:
     def verify_webhook(self, raw, signature, now):
         body = verify_stripe_signature(raw, signature, self._webhook_secret, now=now)
         if (body.get("object") != "event" or body.get("livemode") is not (self.mode == "live")
-                or body.get("api_version") != self.api_version or body.get("account") is not None):
+                or body.get("api_version") not in self._webhook_api_versions or body.get("account") is not None):
             raise HTTPException(400, "A pinned-version, matching-mode platform billing event is required.")
         event_type = body.get("type")
         accepted = {"customer.subscription." + action for action in
@@ -626,6 +646,7 @@ class StripeLiveProvider(StripeTestProvider):
         return cls(os.environ.get("MOBILE_BILLING_STRIPE_LIVE_SECRET_KEY", ""),
                    os.environ.get("MOBILE_BILLING_STRIPE_LIVE_WEBHOOK_SECRET", ""),
                    portal_configuration=os.environ.get("MOBILE_BILLING_STRIPE_LIVE_PORTAL_CONFIGURATION", ""),
+                   webhook_api_versions=os.environ.get("MOBILE_BILLING_STRIPE_LIVE_WEBHOOK_API_VERSIONS", ""),
                    activation_approved=os.environ.get("MOBILE_BILLING_LIVE_ACTIVATION_APPROVED", "false") == "true",
                    transport=transport)
 
