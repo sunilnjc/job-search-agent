@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+
+from .moments import parse_moment
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -72,7 +74,7 @@ def public_request(row: dict) -> dict:
             raise ValueError()
         ready = row["kind"] == "export" and row["state"] == "complete" and bool(row.get("export_path"))
         if ready:
-            ready = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00")) > datetime.now(timezone.utc)
+            ready = parse_moment(row["expires_at"]) > datetime.now(timezone.utc)
         return {"id": request_id, "kind": row["kind"], "state": row["state"],
                 "created_at": row["created_at"], "completed_at": row.get("completed_at"),
                 "expires_at": row.get("expires_at"), "download_ready": ready,

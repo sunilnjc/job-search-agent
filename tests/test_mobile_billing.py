@@ -589,6 +589,15 @@ class BillingTransportTests(unittest.IsolatedAsyncioTestCase):
             await self.provider.create_customer(USER_A, "verified@example.test", operation)
         self.assertFalse(self.stripe.requests)
 
+    async def test_pending_creation_accepts_trimmed_database_fraction(self):
+        # PostgreSQL trims trailing zeros: Python 3.9 rejected this shape, so a
+        # real sandbox checkout failed with "billing unavailable" before any POST.
+        trimmed = datetime.fromtimestamp(NOW, timezone.utc).isoformat().replace("+00:00", "")
+        trimmed = (trimmed.split(".")[0] + ".23869+00:00")
+        operation = {"id": str(uuid4()), "state": "pending", "created_at": trimmed}
+        await self.provider.create_customer(USER_A, "verified@example.test", operation)
+        self.assertTrue([r for r in self.stripe.requests if r.method == "POST"])
+
     async def test_pending_creation_tolerates_small_database_clock_skew_only(self):
         # created_at comes from the database clock, which may run slightly ahead.
         ahead = {"id": str(uuid4()), "state": "pending",

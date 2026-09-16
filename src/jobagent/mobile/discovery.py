@@ -20,6 +20,8 @@ import unicodedata
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+from .moments import parse_moment
 from html.parser import HTMLParser
 from typing import Annotated, Callable, Literal, Mapping, Optional
 from urllib.parse import urlsplit
@@ -215,7 +217,7 @@ def _timestamp(value, *, milliseconds=False) -> Optional[str]:
         if milliseconds and type(value) in {int, float}:
             moment = datetime.fromtimestamp(value / 1000, tz=timezone.utc)
         elif isinstance(value, str) and len(value) <= 64:
-            moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            moment = parse_moment(value)
             if moment.tzinfo is None:
                 return None
         else:

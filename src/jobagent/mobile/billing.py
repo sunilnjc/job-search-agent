@@ -17,6 +17,8 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+
+from .moments import parse_moment
 from typing import Any, Mapping, Optional, Protocol, Tuple
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -365,7 +367,7 @@ class StripeTestProvider:
         # retry only within the conservative retention window with the SAME key.
         operation_id = _uuid(operation["id"])
         if operation.get("state") == "pending":
-            created = datetime.fromisoformat(operation["created_at"].replace("Z", "+00:00"))
+            created = parse_moment(operation["created_at"])
             # created_at is the database clock; allow bounded skew ahead of this server.
             if created.tzinfo is None or not -OPERATION_CLOCK_SKEW <= clock() - created.timestamp() < 23 * 3600:
                 raise unavailable()
