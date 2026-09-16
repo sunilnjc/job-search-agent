@@ -283,11 +283,27 @@ class SignatureTests(unittest.TestCase):
 
     def test_live_wrong_version_or_connect_events_rejected(self):
         provider = StripeTestProvider(KEY, SECRET)
-        for changes in ({"livemode": True}, {"api_version": "2026-01-01"}, {"account": "acct_Other"}):
+        for changes in ({"livemode": True}, {"api_version": "2026-01-01"}, {"account": "acct_Other"},
+                        {"api_version": "2026-08-26.dahlia"}):
             raw = event(**changes)
             with self.subTest(changes=changes), self.assertRaises(HTTPException) as caught:
                 provider.verify_webhook(raw, signed(raw), NOW)
             self.assertEqual(caught.exception.status_code, 400)
+
+    def test_reviewed_delivery_version_accepted_only_when_configured(self):
+        # Stripe stamps a delivered event with the account's default version even
+        # when the endpoint object reports a pin, so reviewed versions are config.
+        raw = event(api_version="2026-08-26.dahlia")
+        with self.assertRaises(HTTPException):
+            StripeTestProvider(KEY, SECRET).verify_webhook(raw, signed(raw), NOW)
+        reviewed = StripeTestProvider(KEY, SECRET, webhook_api_versions="2026-08-26.dahlia")
+        self.assertEqual(reviewed.verify_webhook(raw, signed(raw), NOW).customer_id, "cus_A")
+        pinned = event()
+        self.assertIsNotNone(reviewed.verify_webhook(pinned, signed(pinned), NOW))
+        for invalid in ("not-a-version", "2026-08-26.DAHLIA", "2026-8-26",
+                        "2026-08-26.a,2026-08-27.b,2026-08-28.c,2026-08-29.d,2026-08-30.e"):
+            with self.subTest(invalid=invalid), self.assertRaises(HTTPException):
+                StripeTestProvider(KEY, SECRET, webhook_api_versions=invalid)
 
 
 class ConfigurationTests(unittest.TestCase):
