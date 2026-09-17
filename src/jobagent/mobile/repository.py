@@ -79,7 +79,7 @@ COLUMNS = {
     "applications": "id,user_id,job_id,status,applied_at,submission_url,notes,created_at,updated_at",
     "mobile_questions": "id,user_id,job_id,prompt,answer,status,remember,created_at,updated_at",
     "mobile_answers": "id,user_id,question,answer,scope,source_question_id,confirmed_at,created_at,updated_at",
-    "job_scores": "id,user_id,job_id,score,recommendation,rationale,model_provider,model_name,prompt_version,created_at",
+    "job_scores": "id,user_id,job_id,score,recommendation,rationale,fit_explanation,model_provider,model_name,prompt_version,created_at",
     "model_runs": "id,user_id,job_id,application_id,operation,provider,model_name,status,input_summary,output_summary,error_message,started_at,completed_at,created_at",
 }
 

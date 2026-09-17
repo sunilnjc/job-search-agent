@@ -4,7 +4,7 @@ A private, mobile-friendly job-application assistant for finding fresh, eligible
 
 The goal is **a small, explainable shortlist of worthwhile roles**, not thousands of unfiltered listings.
 
-> Full product, architecture, prompt, security, and roadmap reference: [Job Search Agent Blueprint](docs/job-search-agent-blueprint.md)
+> Full product, architecture, prompt, security, and roadmap reference: [Job Search Agent Blueprint](docs/job-search-agent-blueprint.md). Operator GTM metrics, trust page, and weekly dogfood export: [GTM operator metrics](docs/gtm-operator-metrics.md).
 
 ## What it does
 

@@ -29,6 +29,7 @@ SQL_SUITES = (
     "test_mobile_privacy_lifecycle_sql.PrivacyLifecyclePostgresTests",
     "test_mobile_profile_sql.AtomicProfilePostgresTests",
     "test_mobile_readiness_sql.ReadinessPostgresTests",
+    "test_gtm_operator_metrics_sql.OperatorMetricsPostgresTests",
 )
 
 

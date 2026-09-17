@@ -2,6 +2,7 @@ import type { BetaJob } from "./types";
 import { safePostingUrl } from "./workspace";
 import { WorkspaceDialog } from "./WorkspaceDialog";
 import { assessmentDisplay } from "./assessmentDisplay";
+import { FitExplanationBlock } from "./FitExplanationBlock";
 
 export type JobDetailWorkspaceProps = {
   job: BetaJob;
@@ -95,8 +96,9 @@ export function JobDetailWorkspace({ job, onClose, onOpenStudio }: JobDetailWork
             </div>
             <p className="beta-job-detail-status-copy">{labelForEligibility(job.eligibility_status)}.</p>
             <p className="beta-job-detail-muted">
-              {job.score != null ? `${assessmentDisplay(job)} ${job.rationale || ""}` : "Open Studio to assess this role against your selected resume and confirmed career facts."} This is not an ATS score, hiring probability or independent verification of work rights.
+              {job.score != null ? assessmentDisplay(job) : "Open Studio to assess this role against your selected resume and confirmed career facts."} This is not an ATS score, hiring probability or independent verification of work rights.
             </p>
+            {job.score != null && <FitExplanationBlock job={job} />}
           </section>
 
           <section className="beta-job-detail-section" aria-labelledby={`job-detail-preparation-${job.id}`}>

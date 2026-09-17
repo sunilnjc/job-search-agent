@@ -11,6 +11,7 @@ import { safePostingUrl } from "./workspace";
 import { checkedReadiness, durablePacketReviewed, latestApplication, packetReview, readinessIssue, readinessReadIssue, refreshAfterApplicationSave, reviewMatches, serverStudioPackets, studioContextKey, studioQuestions } from "./studioReadiness";
 import { DocumentReviewPanel } from "./DocumentReviewPanel";
 import { assessmentDisplay } from "./assessmentDisplay";
+import { FitExplanationBlock } from "./FitExplanationBlock";
 import type { PacketReview } from "./studioReadiness";
 import "./studio-workflow.css";
 
@@ -242,7 +243,7 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
         <label className="workflow-check"><input type="checkbox" checked={confirmed} disabled={busy || dirty} onChange={event => setConfirmed(event.target.checked)} /><span>I explicitly confirm this job-specific self-report and understand it is not independently verified.</span></label>
         <button className="beta-secondary" disabled={busy || dirty || !eligibility || !reason.trim() || !confirmed}>Save eligibility self-report</button>
       </form>
-      <div className="workflow-card"><h3>Role assessment</h3><p>{assessmentDisplay(job)}</p><p className="workflow-prose">{job.rationale}</p><button onClick={() => setStep("documents")}>Choose resume and assess role</button></div>
+      <div className="workflow-card"><h3>Role assessment</h3><p>{assessmentDisplay(job)}</p><FitExplanationBlock job={job} /><button onClick={() => setStep("documents")}>Choose resume and assess role</button></div>
     </div>}
     {step === "documents" && <div className="workflow-stack">
       <div className="workflow-card"><h3>Assess and prepare</h3><p>Source resume + confirmed facts + saved job description form the preparation context. Generated documents are drafts; no guarantee of screening success.</p>
@@ -256,7 +257,7 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
           {recovery.operations.map(operation => <label className="workflow-check" key={operation.id}><input type="checkbox" disabled={!freshSourceId || freshSourceId !== resumeId || !selectedResume} checked={acknowledgedOperations.includes(operation.id)} onChange={event => setAcknowledgedOperations(current => event.target.checked ? [...current.filter(id => id !== operation.id), operation.id] : current.filter(id => id !== operation.id))} /><span>I acknowledge missing file {operation.filename} (operation {operation.id}). With my explicitly selected source, I choose one new paid AI preparation while this old journal stays unresolved.</span></label>)}
         </fieldset>}
         <div className="workflow-actions"><button className="beta-secondary" disabled={busy || !canAnalyze} onClick={() => void analyze("rank")}>Assess role with AI</button><button className="beta-primary" disabled={busy || !canPrepare} onClick={() => void analyze("prepare")}>Prepare draft documents</button></div>
-        {job.score != null && <><p>{assessmentDisplay(job)}</p><p className="workflow-prose">{job.rationale}</p></>}
+        {job.score != null && <><p>{assessmentDisplay(job)}</p><FitExplanationBlock job={job} /></>}
       </div>
       <DocumentReviewPanel userId={userId} jobId={job.id} refreshKey={artifacts.map(artifact => artifact.id).join(":")} />
       <div className="workflow-card"><h3>Saved document versions</h3><p>Historical files may reflect an older posting, resume or profile. Review against the current facts; preparing again does not remove previous versions.</p>

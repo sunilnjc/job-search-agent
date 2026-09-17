@@ -1,6 +1,8 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from jobagent.mobile.repository import SupabaseSettings
@@ -28,7 +30,7 @@ class PublicWebTests(unittest.TestCase):
         self.assertEqual(self.client.get("/beta").headers["cache-control"], "no-store, no-store")
 
     def test_founder_private_files_and_unknown_paths_never_render(self):
-        for path in ("/admin", "/api/jobs", "/.env", "/src/jobagent/mobile/web.py", "/beta/anything", "/assets/%2e%2e/.env"):
+        for path in ("/admin", "/api/jobs", "/.env", "/src/jobagent/mobile/web.py", "/beta/anything", "/beta/trust", "/assets/%2e%2e/.env"):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 404)
@@ -45,6 +47,17 @@ class PublicWebTests(unittest.TestCase):
         self.assertEqual(self.client.get("/readyz").status_code, 503)
         self.assertEqual(self.client.get("/healthz").status_code, 200)
         self.assertEqual(self.client.get("/beta").status_code, 503)
+
+    def test_trust_page_is_off_by_default_and_serves_only_when_flagged(self):
+        self.assertEqual(self.client.get("/beta/trust").status_code, 404)
+        self.assertEqual(self.client.get("/trust").status_code, 404)
+        with patch.dict(os.environ, {"MOBILE_TRUST_PAGE_ENABLED": "true"}):
+            flagged = TestClient(create_web_app(self.root, settings=SupabaseSettings("https://example.supabase.co", "sb_publishable_fixture")))
+            self.addCleanup(flagged.close)
+            self.assertEqual(flagged.get("/beta/trust").status_code, 200)
+            self.assertEqual(flagged.get("/beta/trust").headers["cache-control"], "no-store, no-store")
+            self.assertEqual(flagged.get("/trust").url.path, "/beta/trust")
+            self.assertEqual(flagged.get("/beta/anything").status_code, 404)
 
     def test_root_public_symlinks_cannot_escape_build(self):
         with tempfile.TemporaryDirectory() as outside:

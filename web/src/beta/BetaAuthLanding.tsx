@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { requireSupabase } from "./supabase";
 import { BrandIdentity } from "./BrandIdentity";
+import { trustPageEnabled } from "./trustPage";
 
 type AuthMode = "signin" | "signup";
 
@@ -82,7 +83,7 @@ export function BetaAuthLanding({ notice, error, onNotice, onError, privacyInten
           <li><span>02</span> Store your source resumes privately</li>
           <li><span>03</span> Track preparation, applications and next steps</li>
         </ul>
-        <p className="beta-auth-brand-footnote">Private beta · Built for thoughtful, international job searches.</p>
+        <p className="beta-auth-brand-footnote">Private beta · Built for thoughtful, international job searches.{trustPageEnabled ? <> · <a href="/beta/trust">Trust and safety</a></> : null}</p>
       </section>
 
       <section className="beta-auth-panel" aria-labelledby="beta-auth-title">

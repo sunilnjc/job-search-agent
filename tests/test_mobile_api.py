@@ -542,6 +542,12 @@ class MobileAPITests(unittest.TestCase):
         self.assertEqual(set(context), {"profile", "career_text", "career_background", "preferences", "resume_text", "job", "answers"})
         self.assertEqual(context["career_text"], "Confirmed engineering work")
         self.assertEqual(self.request("GET", "artifacts/" + artifact["id"] + "/download").content, b"Confirmed resume text")
+        usage = run["output_summary"]["usage"]
+        self.assertEqual(usage["request_type"], "packet_prepare")
+        self.assertEqual(usage["input_tokens"], 10)
+        self.assertEqual(usage["reserved_units"], 1)
+        self.assertNotIn("secret", json.dumps(usage))
+        self.assertIn("packet_burn", run["output_summary"])
 
     def test_preparation_cannot_read_another_users_resume(self):
         job, resume = self.supabase.job(), self.supabase.resume(USER_B)
@@ -573,6 +579,13 @@ class MobileAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["score"], 8.5)
         self.assertEqual(response.json()["status"], "matched")
+        fit = response.json()["fit_explanation"]
+        self.assertEqual(set(fit), {"why", "evidence", "uncertainty"})
+        self.assertTrue(any(fit[key] for key in fit))
+        usage = self.supabase.tables["model_runs"][0]["output_summary"]["usage"]
+        self.assertEqual(usage["request_type"], "assessment")
+        self.assertEqual(usage["reserved_units"], 1)
+        self.assertNotIn("secret", json.dumps(usage))
         job["status"] = "applied"
         self.studio.rank_job.return_value = AuditDict(score=2, recommendation="exclude", rationale="Insufficient overlap")
         response = self.request("POST", "jobs/" + job["id"] + "/rank", json={})
@@ -1177,7 +1190,7 @@ class MobileAPITests(unittest.TestCase):
 
     def test_repository_columns_and_write_grants_match_actual_sql(self):
         root = Path(__file__).resolve().parents[1]
-        sql = "\n".join((root / "supabase" / "migrations" / filename).read_text() for filename in ("0001_beta_multi_tenant.sql", "0002_mobile_career_workspace.sql", "0003_profession_neutral_background.sql", "0005_mobile_resume_operations.sql", "0006_mobile_artifact_operations.sql", "0012_discovery_rules.sql"))
+        sql = "\n".join((root / "supabase" / "migrations" / filename).read_text() for filename in ("0001_beta_multi_tenant.sql", "0002_mobile_career_workspace.sql", "0003_profession_neutral_background.sql", "0005_mobile_resume_operations.sql", "0006_mobile_artifact_operations.sql", "0012_discovery_rules.sql", "0015_gtm_operator_metrics.sql"))
         tables = {}
         for match in re.finditer(r"create table(?: if not exists)? public\.(\w+)\s*\((.*?)\n\);", sql, re.S):
             tables[match[1]] = set(re.findall(r"^  (\w+)\s+(?:uuid|text|numeric|boolean|bigint|timestamptz|jsonb)\b", match[2], re.M))
