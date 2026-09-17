@@ -598,6 +598,15 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
     async def health() -> dict:
         return {"status": "ok", "service": "job-pursuit-mobile"}
 
+    @application.get("/readyz")
+    async def readyz():
+        """Public probe path. Tunnel should route /readyz here, not the SPA host."""
+        try:
+            (settings or SupabaseSettings.from_env()).validate()
+        except Exception:
+            return JSONResponse({"status": "not_ready", "service": "job-pursuit-mobile"}, status_code=503)
+        return {"status": "ready", "service": "job-pursuit-mobile", "scope": "configuration"}
+
     @application.get("/api/mobile/version")
     async def version() -> dict:
         return public_release()
