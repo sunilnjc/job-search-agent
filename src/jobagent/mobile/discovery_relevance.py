@@ -248,17 +248,25 @@ def _segments(description: str):
     one requirement into fragments ("...data will pass through your software" /
     "from persistent storage through to API endpoint") and each fragment is then
     shown as its own requirement. A line opening lower-case continues the
-    previous one; a blank line always ends a bullet.
+    previous one only when it is not a new list item and the buffer is not a
+    colon heading; a blank line always ends a bullet. List markers are detected
+    before they are stripped so "- python" is never treated as a wrapped
+    continuation of "Requirements:".
     """
     buffer = ""
     for raw in description.splitlines():
-        line = " ".join(raw.split()).strip(" \t-•*·")
-        if not line:
+        collapsed = " ".join(raw.split())
+        if not collapsed:
             if buffer:
                 yield buffer
             buffer = ""
             continue
-        if buffer and line[:1].islower():
+        bullet = bool(re.match(r"(?:[-•*·]+|\d+[.)])\s+\S", collapsed))
+        # Strip list markers only after recording whether this starts a new item.
+        line = re.sub(r"^(?:[-•*·]+|\d+[.)])\s*", "", collapsed).strip(" \t-•*·")
+        if not line:
+            continue
+        if buffer and line[:1].islower() and not bullet and not buffer.endswith(":"):
             buffer += " " + line
             continue
         if buffer:
