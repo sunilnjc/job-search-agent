@@ -213,7 +213,17 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
     } finally { setRecoveryKey(current => current + 1); }
   });
   return <section className="beta-application-studio workflow" aria-label="Application Studio">
-    <header className="beta-application-studio__header"><p className="beta-eyebrow">Application Studio · manual preparation</p><h2>{job.title}</h2><p>{job.company_name} · {job.location_text || "Location not listed"}</p><p>Application record: {serverReadiness?.application_id ? serverReadiness.application_status : application?.status ?? "Not created"}. Ready requires a current reviewed packet. Submitted is user-reported, not verified by an employer. No automatic submission.</p>{postingUrl && <a href={postingUrl} target="_blank" rel="noreferrer">Open original posting ↗</a>}</header>
+    <header className="beta-application-studio__header">
+      <p className="beta-eyebrow">Application Studio · manual preparation</p>
+      <h2>{job.title}</h2>
+      <p>{job.company_name} · {job.location_text || "Location not listed"}</p>
+      {postingUrl && <a href={postingUrl} target="_blank" rel="noreferrer">Open original posting ↗</a>}
+      <p className="studio-status-line">Application record: {serverReadiness?.application_id ? serverReadiness.application_status : application?.status ?? "Not created"}. No automatic submission.</p>
+      <details className="studio-about">
+        <summary>About Ready and Submitted</summary>
+        <p>Ready requires a current reviewed packet you checked against current facts. Submitted is user-reported, not verified by an employer. This app never submits for you.</p>
+      </details>
+    </header>
     <nav className="beta-application-studio__steps" aria-label="Application preparation steps">{STEPS.map(([id, label]) => <button key={id} aria-current={step === id ? "step" : undefined} className={step === id ? "is-active" : ""} onClick={() => setStep(id)}>{label}{id === "questions" && pending.length ? ` (${pending.length})` : ""}</button>)}</nav>
     {error && <p className="beta-error" role="alert">{error}</p>}{notice && <p className="beta-notice" role="status">{notice}</p>}
     {syncWarning && <p className="beta-notice" role="status">{syncWarning}</p>}
@@ -225,7 +235,7 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
         await mobileRequest(userId, `/jobs/${job.id}`, { method: "PATCH", signal: request.current.signal, body: { description: description.trim() } });
         invalidateReview(); setConfirmed(false); setEligibility(""); setReason(""); await load(); setNotice("Job description saved. Changed role facts invalidate the previous match and eligibility review; old documents remain for your review.");
       }); }}>
-        <h3>Job description</h3><p>Paste the employer’s full requirements. We do not fetch this URL or verify whether the vacancy is still open.</p>
+        <h3>Job description</h3><p className="studio-lede">Paste the full posting text. We do not fetch the URL or verify it is still open.</p>
         <label>Full job description<textarea required maxLength={80000} rows={10} value={description} disabled={busy} onChange={event => { setDescription(event.target.value); invalidateReview(); }} /></label>
         <button className="beta-secondary" disabled={busy || !dirty || !description.trim()}>Save job description</button>
       </form>
@@ -235,37 +245,45 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
         invalidateReview(); await load(); setConfirmed(false); setNotice("Your job-specific self-report was saved. It is not independently verified.");
       }); }}>
         <h3>Work eligibility · your self-report</h3>
-        <p>Current review: {job.eligibility_review?.status ?? "Not recorded"}. {job.eligibility_review?.reason}</p>
-        <p>Review the posting and your actual work rights. Neither AI nor a free-text answer can approve legal eligibility. If uncertain, choose unknown and verify with the employer or a qualified adviser.</p>
+        <p className="studio-lede">Current review: {job.eligibility_review?.status ?? "Not recorded"}. {job.eligibility_review?.reason}</p>
+        <details className="studio-about">
+          <summary>About eligibility self-report</summary>
+          <p>Review the posting and your actual work rights. Neither AI nor a free-text answer can approve legal eligibility. If uncertain, choose unknown and verify with the employer or a qualified adviser.</p>
+        </details>
         <label>Your eligibility status<select required value={eligibility} disabled={busy || dirty} onChange={event => { setEligibility(event.target.value as typeof eligibility); setConfirmed(false); }}><option value="">Choose explicitly</option><option value="eligible">I report that I am eligible</option><option value="ineligible">I report that I am not eligible</option><option value="unknown">Unknown — needs verification</option></select></label>
         <label>Reason for this self-report<textarea required maxLength={2000} value={reason} disabled={busy || dirty} onChange={event => { setReason(event.target.value); setConfirmed(false); }} /></label>
         <label className="workflow-check"><input type="checkbox" checked={confirmed} disabled={busy || dirty} onChange={event => setConfirmed(event.target.checked)} /><span>I explicitly confirm this job-specific self-report and understand it is not independently verified.</span></label>
         <button className="beta-secondary" disabled={busy || dirty || !eligibility || !reason.trim() || !confirmed}>Save eligibility self-report</button>
       </form>
-      <div className="workflow-card"><h3>Role assessment</h3><p>{assessmentDisplay(job)}</p><p className="workflow-prose">{job.rationale}</p><button onClick={() => setStep("documents")}>Choose resume and assess role</button></div>
+      <div className="workflow-card"><h3>Role assessment</h3><p>{assessmentDisplay(job)}</p>{job.rationale ? <details className="studio-about"><summary>Why this estimate?</summary><p className="workflow-prose">{job.rationale}</p></details> : null}<button onClick={() => setStep("documents")}>Choose resume and assess role</button></div>
     </div>}
     {step === "documents" && <div className="workflow-stack">
-      <div className="workflow-card"><h3>Assess and prepare</h3><p>Source resume + confirmed facts + saved job description form the preparation context. Generated documents are drafts; no guarantee of screening success.</p>
+      <div className="workflow-card"><h3>Assess and prepare</h3><p className="studio-lede">Source resume, confirmed facts, and saved job description form the context. Drafts only — no screening guarantee.</p>
         <label>Source resume<select value={resumeId} disabled={busy} onChange={event => { setResumeId(event.target.value); setPacketKey(""); setFreshSourceId(missingBytesConfirmed ? event.target.value || null : null); setAcknowledgedOperations([]); invalidateReview(); }}><option value="">Choose a resume</option>{workspace.resumes.map(resume => <option key={resume.id} value={resume.id}>{resume.label}</option>)}</select></label>
         <label>Preparation approach<select value={variant} disabled={busy} onChange={event => { setVariant(event.target.value); setPacketKey(""); invalidateReview(); }}><option value="role_aligned">Role-aligned</option><option value="career_change">Career change</option></select></label>
         {!workspace.profile?.career_text?.trim() && <p className="beta-notice">Confirm career facts below (Review extracted facts), or add them in your profile, before preparation.</p>}
         {!description.trim() && <p className="beta-notice">Add the full job description in Role &amp; eligibility.</p>}{dirty && <p className="beta-notice">Save your edited job description first.</p>}
-        <label className="workflow-check"><input type="checkbox" checked={consent} disabled={busy} onChange={event => setConsent(event.target.checked)} /><span>Enable AI assistance for this role. When I click Assess or Prepare, the selected resume, career facts, saved answers and job description may be sent to the configured AI provider.</span></label>
+        <label className="workflow-check"><input type="checkbox" checked={consent} disabled={busy} onChange={event => setConsent(event.target.checked)} /><span>Enable AI for this role. Assess or Prepare may send the selected resume, career facts, saved answers, and job description to the configured AI provider.</span></label>
         {!recoveryClear(recovery, scope) && <p className="beta-notice">{recovery.phase !== "checked" ? "Recovery records are not verified. AI remains blocked while checking or after a failed check. Use Check pending artifact operations below." : "An earlier artifact save is unresolved. Attempt recovery for every operation below; recovery never calls AI."}</p>}
-        {missingBytesConfirmed && <fieldset className="workflow-fieldset" disabled={busy}><legend>Optional new paid preparation — not recovery</legend><p>Recovery confirmed missing bytes for every listed operation. Upload a fresh source below if needed, then select the source resume explicitly above. The default selection is not consent. Old journals and saved files remain unchanged.</p><p>This is a separate AI preparation that may spend your paid AI budget. It does not restore missing files, resolve or cancel old operations, or delete anything. Each acknowledgement applies to one Prepare click in this Studio session only. Assess remains blocked while recovery is unresolved.</p>
+        {missingBytesConfirmed && <fieldset className="workflow-fieldset" disabled={busy}><legend>Optional new paid preparation — not recovery</legend>
+          <details className="studio-about">
+            <summary>About missing bytes and new paid preparation</summary>
+            <p>Recovery confirmed missing bytes for every listed operation. Upload a fresh source below if needed, then select the source resume explicitly above. The default selection is not consent. Old journals and saved files remain unchanged.</p>
+            <p>This is a separate AI preparation that may spend your paid AI budget. It does not restore missing files, resolve or cancel old operations, or delete anything. Each acknowledgement applies to one Prepare click in this Studio session only. Assess remains blocked while recovery is unresolved.</p>
+          </details>
           {recovery.operations.map(operation => <label className="workflow-check" key={operation.id}><input type="checkbox" disabled={!freshSourceId || freshSourceId !== resumeId || !selectedResume} checked={acknowledgedOperations.includes(operation.id)} onChange={event => setAcknowledgedOperations(current => event.target.checked ? [...current.filter(id => id !== operation.id), operation.id] : current.filter(id => id !== operation.id))} /><span>I acknowledge missing file {operation.filename} (operation {operation.id}). With my explicitly selected source, I choose one new paid AI preparation while this old journal stays unresolved.</span></label>)}
         </fieldset>}
         <div className="workflow-actions"><button className="beta-secondary" disabled={busy || !canAnalyze} onClick={() => void analyze("rank")}>Assess role with AI</button><button className="beta-primary" disabled={busy || !canPrepare} onClick={() => void analyze("prepare")}>Prepare draft documents</button></div>
-        {job.score != null && <><p>{assessmentDisplay(job)}</p><p className="workflow-prose">{job.rationale}</p></>}
+        {job.score != null && <><p>{assessmentDisplay(job)}</p>{job.rationale ? <details className="studio-about"><summary>Why this estimate?</summary><p className="workflow-prose">{job.rationale}</p></details> : null}</>}
       </div>
       <DocumentReviewPanel userId={userId} jobId={job.id} refreshKey={artifacts.map(artifact => artifact.id).join(":")} />
-      <div className="workflow-card"><h3>Saved document versions</h3><p>Historical files may reflect an older posting, resume or profile. Review against the current facts; preparing again does not remove previous versions.</p>
+      <div className="workflow-card"><h3>Saved document versions</h3><p className="studio-lede">Older versions may not match current facts; preparing again keeps prior files.</p>
         {artifacts.length === 0 ? <p>No generated documents for this role yet.</p> : <ul className="workflow-files">{artifacts.map(artifact => <li key={artifact.id}><div><strong title={artifact.filename}>{documentLabel(artifact)}</strong><small>{artifact.created_at ? new Date(artifact.created_at).toLocaleString() : "Date unavailable"}{preparedIds.includes(artifact.id) ? " · Prepared in this session" : ""}</small></div><button className="beta-secondary" disabled={busy} onClick={() => void act(() => downloadMobileFile(userId, "artifacts", artifact.id, artifact.filename, request.current.signal))}>Download document</button></li>)}</ul>}
       </div>
       <RecoveryPanel userId={userId} kind="artifact" jobId={job.id} refreshKey={recoveryKey} onStatusChange={receiveRecovery} onRecovered={async () => { await load(); setAiHold(false); invalidateReview(); }} />
       <DocumentsPanel session={session} onChanged={async () => { invalidateReview(); await load(); }} />
     </div>}
-    {step === "questions" && <div className="workflow-stack"><h3>Facts needing your input</h3><p>Only give answers you know to be accurate. Saving an answer does not automatically rerun AI or confirm work eligibility. Return to Documents to assess or prepare again.</p>
+    {step === "questions" && <div className="workflow-stack"><h3>Facts needing your input</h3><p className="studio-lede">Answer only what you know. Saving does not rerun AI or confirm eligibility — return to Documents to assess or prepare again.</p>
       {questions.length ? questions.map(question => <QuestionForm key={question.id + (question.answer ?? "")} question={question} disabled={busy} onAnswer={(answer, remember) => act(async () => {
         await mobileRequest(userId, `/questions/${question.id}/answer`, { method: "POST", signal: request.current.signal, body: { answer, remember } });
         invalidateReview(); await load(); setNotice("Answer saved. Rerun assessment or preparation explicitly when you are ready.");
@@ -279,7 +297,10 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
         {!packets.length && <p>No server-verified generation is available for this source and approach. Historical files remain downloadable in Documents, but their filenames alone cannot establish a current matching packet. No AI work is required to record an external submission.</p>}
         {packet?.issue && <p className="beta-notice" role="status">{packet.issue}</p>}
         {packet?.pair && <ul className="workflow-files">{packet.pair.map(artifact => <li key={artifact.id}><span>{documentLabel(artifact)}</span><button className="beta-secondary" disabled={busy} onClick={() => void act(() => downloadMobileFile(userId, "artifacts", artifact.id, artifact.filename, request.current.signal))}>Download selected {artifact.kind === "tailored_resume" ? "resume" : "cover letter"}</button></li>)}</ul>}
-        <p className="beta-notice">The server binds each packet to its generation, source resume, posting and career context. Changing facts, preferences, source files or answers invalidates its review. Ready saves your review across devices, not a guarantee of accuracy or an employer submission.</p>
+        <details className="studio-about">
+          <summary>About packet binding and Ready</summary>
+          <p>The server binds each packet to its generation, source resume, posting and career context. Changing facts, preferences, source files or answers invalidates its review. Ready saves your review across devices, not a guarantee of accuracy or an employer submission.</p>
+        </details>
         {readinessError && <p role="alert">Packet verification unavailable: {readinessError}</p>}
         {durableReviewed && <p role="status">Your review of this exact packet is saved and current. To clear Ready, save a draft record below.</p>}
         {serverReadiness?.review && !serverReadiness.review.current && <p role="status">A previous review is saved, but its packet or context is no longer current. Historical review does not make this application Ready.</p>}
@@ -292,7 +313,7 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
         <p>Ready is a personal checklist state, not a submission or independent approval.</p><div className="workflow-actions"><button disabled={busy} onClick={() => void saveApplication("draft")}>Save draft record</button><button className="beta-primary" disabled={busy || !canReady} onClick={() => void saveApplication("ready")}>Mark ready for manual apply</button></div>
       </div>
       <form className="workflow-card" onSubmit={event => { event.preventDefault(); void saveApplication("submitted"); }}>
-        <h3>Already applied outside this app?</h3><p>Open the original employer posting and complete its application yourself. This tracker cannot fill, send or verify that submission.</p>
+        <h3>Already applied outside this app?</h3><p className="studio-lede">Apply on the employer site yourself — this tracker cannot fill, send, or verify that submission.</p>
         <label>External submission note<textarea required maxLength={8000} value={notes} disabled={busy} onChange={event => { setNotes(event.target.value); setSubmittedConfirmed(false); }} placeholder="Where and when you applied; optional confirmation reference. Do not paste credentials." /></label>
         <label className="workflow-check"><input type="checkbox" checked={submittedConfirmed} disabled={busy} onChange={event => setSubmittedConfirmed(event.target.checked)} /><span>I confirm I already submitted this application outside The Job Pursuit.</span></label>
         <button className="beta-secondary" disabled={busy || !notes.trim() || !submittedConfirmed}>Record external submission</button>
