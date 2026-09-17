@@ -61,3 +61,4 @@ ios/**/*.ipa
 ios/**/*.xcresult/
 ios/**/.build/
 ios/build/
+tools/
