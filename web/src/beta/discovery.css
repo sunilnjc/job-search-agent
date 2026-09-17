@@ -1,13 +1,24 @@
-.discovery-panel { display: grid; gap: 20px; }
+.discovery-panel { display: grid; gap: 16px; }
 .discovery-panel h2 { margin-top: 0; }
-.discovery-next-step { border-left: 3px solid var(--beta-text); padding: 4px 16px 16px; margin-block: 18px; }
-.discovery-fit { padding: 14px 18px; background: var(--beta-surface); border: 1px solid var(--beta-border); border-radius: 12px; margin-block: 16px; }
-.discovery-fit h4 { margin: 0 0 8px; font-size: 1rem; }
-.discovery-fit ul { padding-left: 20px; margin: 0 0 12px; line-height: 1.55; }
+.discovery-lede, .discovery-summary, .discovery-fit-line, .discovery-meta, .discovery-saved-note { margin: 0; }
+.discovery-lede, .discovery-summary { color: var(--beta-muted); font-size: .95rem; line-height: 1.45; }
+.discovery-controls { display: grid; gap: 12px; }
+.discovery-controls > p { margin: 0; }
+.discovery-next-step { border-left: 3px solid var(--beta-text); padding: 4px 16px 12px; margin-block: 8px; }
+.discovery-next-step h3 { margin: 0 0 6px; font-size: 1rem; }
+.discovery-next-step p { margin: 0 0 10px; }
+.discovery-results-chrome { display: grid; gap: 10px; }
+.discovery-results-chrome > h2 { margin-bottom: 0; }
+.discovery-compact-notice { margin: 0; padding: 8px 12px; }
+.discovery-about-results, .discovery-why, .discovery-more { border-top: 1px solid var(--beta-border); }
+.discovery-about-results > summary, .discovery-why > summary, .discovery-more > summary { font-weight: 500; color: var(--beta-muted); }
+.discovery-fit { padding: 12px 14px; background: var(--beta-surface); border: 1px solid var(--beta-border); border-radius: 12px; margin-block: 8px; }
+.discovery-fit h4 { margin: 0 0 8px; font-size: .95rem; }
+.discovery-fit ul { padding-left: 20px; margin: 0 0 10px; line-height: 1.5; }
 .discovery-filter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
 .discovery-filter-grid input, .discovery-panel input { width: 100%; }
 .discovery-panel small, .discovery-provenance { color: var(--beta-muted); font-size: .875rem; }
-.discovery-panel summary { cursor: pointer; min-height: 44px; padding-block: 10px; font-weight: 600; }
+.discovery-panel summary { cursor: pointer; min-height: 40px; padding-block: 8px; font-weight: 600; }
 .discovery-panel summary:focus-visible { outline: 3px solid var(--beta-text); outline-offset: 4px; }
 .discovery-preferences { border-block: 1px solid var(--beta-border); }
 .discovery-preferences dl { display: grid; gap: 12px; }
@@ -19,11 +30,16 @@
 .discovery-strength-strong { border-color: var(--beta-accent, #2f6f4f); color: var(--beta-accent, #2f6f4f); }
 .discovery-strength-partial { color: var(--beta-text); }
 .discovery-strength-weak { color: var(--beta-muted); }
-.discovery-result-heading h3 { margin: 14px 0 8px; }
+.discovery-result { display: grid; gap: 10px; }
+.discovery-result-heading h3 { margin: 8px 0 4px; }
+.discovery-meta { color: var(--beta-muted); font-size: .95rem; }
+.discovery-fit-line { color: var(--beta-text); font-size: .92rem; line-height: 1.4; }
+.discovery-result-actions { align-items: center; gap: 12px; margin-top: 2px; }
 .discovery-description { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; padding: 14px; border: 1px solid var(--beta-border); border-radius: 12px; }
 .discovery-sources > ul { list-style: none; padding: 0; }
 .discovery-sources > ul > li { padding-block: 16px; border-top: 1px solid var(--beta-border); }
-.discovery-source-link { min-height: 44px; display: inline-flex; align-items: center; padding: 8px 0; color: var(--beta-text); font-weight: 550; text-underline-offset: 3px; }
-.discovery-view-toggle { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 24px; }
+.discovery-source-link { min-height: 44px; display: inline-flex; align-items: center; padding: 8px 0; color: var(--beta-muted); font-weight: 500; text-underline-offset: 3px; }
+.discovery-view-toggle { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 16px; }
 .discovery-view-toggle button[aria-pressed=true] { outline: 2px solid var(--beta-text); outline-offset: 2px; }
+.discovery-warnings-compact h2 { font-size: 1.05rem; }
 @media (max-width: 600px) { .discovery-filter-grid { grid-template-columns: minmax(0, 1fr); } }

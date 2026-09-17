@@ -1,29 +1,362 @@
-.workflow { min-width: 0; overflow-wrap: anywhere; }
-.workflow-stack { display: grid; gap: 20px; }
-.workflow-card { padding: 20px; border: 1px solid var(--beta-border); border-radius: 16px; background: var(--beta-surface); min-width: 0; }
-.workflow-card h3 { margin-top: 0; }
-.workflow label { display: grid; gap: 8px; margin: 14px 0; color: var(--beta-text); }
-.workflow textarea { width: 100%; min-height: 120px; resize: vertical; }
-.workflow select { width: 100%; max-width: 100%; }
-.workflow .workflow-check, .beta-onboarding-checkbox { display: flex; align-items: flex-start; gap: 10px; }
-.workflow .workflow-check input, .beta-onboarding-checkbox input { width: 20px; height: 20px; min-height: 20px; flex: 0 0 20px; margin-top: 3px; }
-.workflow-actions { display: flex; gap: 12px; flex-wrap: wrap; }
-.workflow button { min-height: 44px; white-space: normal; }
-.pursuit-web .workflow button:not(.beta-primary):not(.beta-secondary):not(.beta-text-button) { appearance: none; padding: 10px 16px; border: 1px solid var(--beta-border); border-radius: 12px; background: var(--beta-surface); color: var(--beta-text); font: inherit; font-weight: 550; }
-.pursuit-web .workflow button:not(:disabled):hover { border-color: var(--beta-muted); }
-.pursuit-web .workflow .beta-secondary { padding: 10px 16px; border-radius: 12px; font-weight: 550; }
-.workflow button:disabled { opacity: .55; cursor: not-allowed; }
-.workflow-files { padding: 0; list-style: none; }
-.workflow-files li { display: flex; gap: 12px; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--beta-border); }
-.workflow-files li > div { min-width: 0; }
-.workflow-files small { display: block; color: var(--beta-muted); margin-top: 6px; }
-.workflow-prose { white-space: pre-wrap; }
-.workflow-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
-.beta-onboarding input[type=file] { max-width: 100%; }
-.beta-profile-career { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+/* Application Studio — unfold calm premium layout using pursuit-theme tokens */
+.workflow {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: grid;
+  gap: 28px;
+}
+
+.workflow-stack {
+  display: grid;
+  gap: 24px;
+}
+
+.workflow-card {
+  padding: 28px 28px 26px;
+  border: 1px solid var(--beta-border);
+  border-radius: 24px;
+  background: var(--beta-surface);
+  min-width: 0;
+  box-shadow: 0 1px 0 rgba(35, 36, 38, 0.04), 0 18px 40px -28px rgba(35, 50, 56, 0.28);
+}
+
+.workflow-card h3 {
+  margin: 0 0 10px;
+  font-size: 1.2rem;
+  letter-spacing: -0.02em;
+  font-weight: 650;
+}
+
+.workflow label {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+  color: var(--beta-text);
+  font-size: 0.9rem;
+  font-weight: 550;
+}
+
+.workflow textarea {
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  padding: 14px 16px;
+  border-radius: 14px;
+  line-height: 1.5;
+}
+
+.workflow select {
+  width: 100%;
+  max-width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border-radius: 14px;
+}
+
+.workflow .workflow-check,
+.beta-onboarding-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-weight: 500;
+}
+
+.workflow .workflow-check input,
+.beta-onboarding-checkbox input {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  flex: 0 0 20px;
+  margin-top: 3px;
+}
+
+.workflow-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.workflow button {
+  min-height: 48px;
+  white-space: normal;
+}
+
+.pursuit-web .workflow button:not(.beta-primary):not(.beta-secondary):not(.beta-text-button) {
+  appearance: none;
+  padding: 12px 18px;
+  border: 1px solid var(--beta-border);
+  border-radius: 14px;
+  background: var(--beta-surface);
+  color: var(--beta-text);
+  font: inherit;
+  font-weight: 600;
+}
+
+.pursuit-web .workflow button:not(:disabled):hover {
+  border-color: var(--beta-muted);
+}
+
+.pursuit-web .workflow .beta-secondary {
+  padding: 12px 18px;
+  border-radius: 14px;
+  font-weight: 600;
+}
+
+.pursuit-web .workflow .beta-primary {
+  padding: 13px 22px;
+  border-radius: 14px;
+  font-weight: 650;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+  box-shadow: 0 10px 24px -16px rgba(102, 64, 224, 0.9);
+}
+
+.workflow button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.workflow-files {
+  padding: 0;
+  list-style: none;
+  margin: 12px 0 0;
+}
+
+.workflow-files li {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--beta-border);
+}
+
+.workflow-files li > div {
+  min-width: 0;
+}
+
+.workflow-files small {
+  display: block;
+  color: var(--beta-muted);
+  margin-top: 6px;
+}
+
+.workflow-prose {
+  white-space: pre-wrap;
+}
+
+.workflow-fieldset {
+  border: 0;
+  margin: 8px 0 0;
+  padding: 16px;
+  min-width: 0;
+  border-radius: 16px;
+  background: var(--beta-surface-strong);
+}
+
+.workflow-fieldset legend {
+  padding: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--beta-muted);
+}
+
+.beta-onboarding input[type="file"] {
+  max-width: 100%;
+}
+
+.beta-profile-career {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow: auto;
+}
+
+/* Studio chrome — clearer hierarchy, calmer density */
+.beta-application-studio {
+  gap: 22px;
+}
+
+.beta-application-studio__header {
+  display: grid;
+  gap: 10px;
+  padding: 8px 2px 4px;
+}
+
+.beta-application-studio__header > h2 {
+  margin: 0;
+  font-size: clamp(1.65rem, 2.6vw, 2.15rem);
+  letter-spacing: -0.04em;
+  line-height: 1.15;
+}
+
+.beta-application-studio__header > p {
+  margin: 0;
+  color: var(--beta-muted);
+}
+
+.beta-application-studio__header > a {
+  color: var(--beta-accent);
+  font-weight: 600;
+  text-underline-offset: 3px;
+  width: fit-content;
+}
+
+.studio-lede,
+.studio-status-line,
+.studio-helper {
+  margin: 0;
+  color: var(--beta-muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.studio-helper {
+  margin: 6px 0 4px;
+  max-width: 52ch;
+}
+
+.studio-checklist {
+  margin: 8px 0 16px;
+  padding-left: 1.15rem;
+  display: grid;
+  gap: 8px;
+  color: var(--beta-text);
+  line-height: 1.45;
+}
+
+.studio-about {
+  border: 0;
+  margin: 4px 0 2px;
+  padding: 0;
+}
+
+.studio-about > summary {
+  cursor: pointer;
+  list-style: none;
+  width: fit-content;
+  min-height: 36px;
+  padding: 4px 0;
+  font-weight: 550;
+  font-size: 0.88rem;
+  color: var(--beta-muted);
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+}
+
+.studio-about > summary::-webkit-details-marker {
+  display: none;
+}
+
+.studio-about > summary:hover {
+  color: var(--beta-text);
+  text-decoration-color: currentColor;
+}
+
+.studio-about > summary:focus-visible {
+  outline: 3px solid var(--beta-text);
+  outline-offset: 4px;
+}
+
+.studio-about > p,
+.studio-about .workflow-prose {
+  margin: 6px 0 12px;
+  max-width: 58ch;
+  color: var(--beta-text);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.workflow-card > .studio-lede {
+  margin-bottom: 6px;
+}
+
+.workflow-card > .studio-about {
+  margin-block: 2px 10px;
+}
+
+/* Step rail — pill strip with clear active state */
+.pursuit-web .beta-application-studio__steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px;
+  margin: 0;
+  border: 1px solid var(--beta-border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--beta-surface) 88%, var(--beta-surface-strong));
+}
+
+.pursuit-web .beta-application-studio__steps button {
+  flex: 1 1 140px;
+  min-height: 46px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--beta-muted);
+  font-weight: 600;
+  font-size: 0.86rem;
+}
+
+.pursuit-web .beta-application-studio__steps button.is-active,
+.pursuit-web .beta-application-studio__steps button[aria-current="step"] {
+  background: var(--beta-surface);
+  color: var(--beta-text);
+  box-shadow: 0 1px 0 rgba(35, 36, 38, 0.06), 0 8px 20px -16px rgba(35, 50, 56, 0.45);
+  border: 1px solid var(--beta-border);
+}
+
+@media (prefers-color-scheme: dark) {
+  .workflow-card {
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 22px 44px -30px rgba(0, 0, 0, 0.85);
+  }
+
+  .pursuit-web .workflow .beta-primary {
+    box-shadow: 0 12px 28px -14px rgba(102, 64, 224, 0.75);
+  }
+
+  .pursuit-web .beta-application-studio__steps {
+    background: color-mix(in srgb, var(--beta-surface) 70%, #000);
+  }
+}
+
 @media (max-width: 600px) {
-  .workflow-card { padding: 14px; }
-  .workflow-files li { align-items: stretch; flex-direction: column; }
-  .workflow .beta-documents-panel__header, .workflow .beta-documents-list__item { flex-direction: column; align-items: stretch; }
-  .workflow .beta-documents-list__actions { flex-wrap: wrap; }
+  .workflow-card {
+    padding: 20px 18px;
+    border-radius: 20px;
+  }
+
+  .workflow-stack {
+    gap: 18px;
+  }
+
+  .workflow-files li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workflow .beta-documents-panel__header,
+  .workflow .beta-documents-list__item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .workflow .beta-documents-list__actions {
+    flex-wrap: wrap;
+  }
+
+  .pursuit-web .beta-application-studio__steps button {
+    flex-basis: calc(50% - 8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workflow-card,
+  .pursuit-web .workflow .beta-primary,
+  .pursuit-web .beta-application-studio__steps button {
+    box-shadow: none;
+  }
 }
