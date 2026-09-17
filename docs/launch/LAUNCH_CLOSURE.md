@@ -7,7 +7,7 @@ Updated 17 September 2026 (product-gates session). Studio UI iteration paused pe
 | Gate | Status this session | Evidence |
 | --- | --- | --- |
 | `/readyz` routing | **DONE** (Mac interim) | Public `GET /readyz` → `200` JSON `{"status":"ready","service":"job-pursuit-mobile","scope":"configuration"}`; tunnel `^/readyz/?$` → `:8843`; unit `tests/test_mobile_readyz.py`. See `docs/launch/READYZ_ROUTING.md`. |
-| Stripe sandbox | **PARTIAL** | Test keys present in `.env.mobile`; billing settings load in `test` mode; webhook GET `405`, unsigned POST `400` (`One valid billing signature header is required.`). Full checkout→webhook→entitlement checklist still open — `docs/launch/STRIPE_SANDBOX_VERIFICATION.md`. No live charges. |
+| Stripe sandbox | **CORE PATH DONE** | Checkout→webhook→entitlement proven in test mode 17 Sep (webhook secret rotated; founder membership converted manual→billing). Portal session OK. Renewal/fail/cancel + CI still open — `docs/launch/STRIPE_SANDBOX_VERIFICATION.md`. No live charges. |
 | Mac-independent hosting | **BLOCKED (external)** | Still Mac + cloudflared. Residual risk in `docs/launch/HOSTING_RESIDUAL_RISK.md`. Waiting on EXT-HOST-01 (host + budget approval). |
 
 Older rows below are retained as historical board state from 15 September 2026.
