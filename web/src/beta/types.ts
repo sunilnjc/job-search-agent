@@ -1,3 +1,9 @@
+export type FitExplanation = {
+  why: string[];
+  evidence: string[];
+  uncertainty: string[];
+};
+
 export type BetaProfile = {
   user_id: string;
   display_name: string | null;
@@ -38,6 +44,7 @@ export type BetaJob = {
   description?: string | null;
   score?: number | null;
   rationale?: string | null;
+  fit_explanation?: FitExplanation | null;
   duplicate?: boolean;
   application_status?: BetaApplication["status"];
   readiness_unavailable?: "capped_workspace" | "packet_check_failed";

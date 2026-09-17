@@ -14,6 +14,12 @@ from .app import create_app as create_api
 from .repository import SupabaseSettings
 
 
+def trust_page_enabled(environ=None) -> bool:
+    """Default off. Operators must set MOBILE_TRUST_PAGE_ENABLED to serve /beta/trust."""
+    source = environ if environ is not None else os.environ
+    return str(source.get("MOBILE_TRUST_PAGE_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def create_web_app(dist=None, **api_options):
     root = Path(dist or os.environ.get("MOBILE_WEB_DIST", "/app/web/dist")).resolve()
     application = create_api(**api_options)
@@ -45,6 +51,13 @@ def create_web_app(dist=None, **api_options):
 
     application.add_api_route("/beta", workspace, methods=["GET", "HEAD"])
     application.add_api_route("/beta/", workspace, methods=["GET", "HEAD"])
+    if trust_page_enabled():
+        application.add_api_route("/beta/trust", workspace, methods=["GET", "HEAD"])
+        application.add_api_route("/beta/trust/", workspace, methods=["GET", "HEAD"])
+
+        @application.get("/trust")
+        async def trust_alias():
+            return RedirectResponse("/beta/trust", status_code=307)
 
     # StaticFiles rejects traversal and does not follow directory symlinks.
     for name in ("assets", "brand"):

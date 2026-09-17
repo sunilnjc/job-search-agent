@@ -22,6 +22,8 @@ import { discoveryContextKey } from "./discovery";
 import type { DiscoverySnapshot } from "./discovery";
 import { BillingPanel } from "./BillingPanel";
 import { billingRouteRequested } from "./billing";
+import { isTrustPath, trustPageEnabled } from "./trustPage";
+import { TrustPageUnpublished, TrustSafetyPage } from "./TrustSafetyPage";
 import "./beta.css";
 import "./pursuit-theme.css";
 
@@ -33,6 +35,9 @@ function humanizeEligibility(value: BetaJob["eligibility_status"]) {
 }
 
 export default function BetaApp() {
+  if (typeof window !== "undefined" && isTrustPath(window.location.pathname)) {
+    return trustPageEnabled ? <div className="pursuit-web"><TrustSafetyPage /></div> : <div className="pursuit-web"><TrustPageUnpublished /></div>;
+  }
   return <div className="pursuit-web"><BetaSession /></div>;
 }
 

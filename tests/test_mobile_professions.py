@@ -456,7 +456,10 @@ class RememberedQuestionTests(OfflineCase):
         with patch.object(studio, "_provider", return_value=StubProvider(rank_output(context, []))):
             result = studio.rank_job(context)
         self.assertTrue(result.questions)
-        self.assertEqual(set(result), {"score", "recommendation", "rationale"})
+        self.assertEqual(set(result), {"score", "recommendation", "rationale", "fit_explanation"})
+        self.assertEqual(set(result["fit_explanation"]), {"why", "evidence", "uncertainty"})
+        self.assertTrue(result["fit_explanation"]["why"])
+        self.assertTrue(result["fit_explanation"]["evidence"] or result["fit_explanation"]["uncertainty"])
 
 
 if __name__ == "__main__":

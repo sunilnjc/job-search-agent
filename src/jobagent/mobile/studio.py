@@ -38,6 +38,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .exports import Block, clean_text, render_docx, render_pdf, safe_link
 from .selections import materialize_selection, selection_schema
 from .writing import compose_letter, connection_options, document_terms, quality_flags
+from .ai_usage import request_type_for
+from .fit_explanation import explanation_from_entries, rationale_from_entries
 from .professions import (
     RequirementAssessment, RubricError, background_from_context,
     credential_review, credential_text, effective_status, job_segments, literal_in, qualification_fact, validate_rubric,
@@ -47,7 +49,7 @@ from .professions import (
 
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_TEXT_CHARS = 100_000
-PROMPT_VERSION = "mobile-studio-v6-source-composition"
+PROMPT_VERSION = "mobile-studio-v7-fit-explanation"
 _metadata: ContextVar[dict] = ContextVar("mobile_studio_model_metadata", default={})
 
 
@@ -547,6 +549,11 @@ channel. Do not complete personal certifications or declarations. Use advice
 keys only as optional additional guidance, not a substitute for useful coaching.
 Ask question keys when facts are missing. Rank scores are subjective fit estimates from 0 to
 10, not ATS probabilities. Missing eligibility requires review, not exclusion.
+When operation is rank, select claims that explain the estimate: confirmed candidate
+overlap is why the score exists, job and candidate source_facts are the evidence,
+and missing eligibility, credentials, or career facts must surface as question keys
+(uncertainty). Do not invent unverified match reasons or free-text why/uncertainty
+fields; the server structures those from your claims, rubric, and questions.
 Return questions using the schema's keys, never invented factual assertions.
 """
 
@@ -625,6 +632,9 @@ class MobileProvider:
                           "output_tokens": getattr(response.usage, "output_tokens", None)}
             self._model_metadata.update({key: value for key, value in counts.items()
                                          if type(value) is int and value >= 0})
+            kind = request_type_for(payload.get("operation") if isinstance(payload, dict) else None)
+            if kind:
+                self._model_metadata["request_type"] = kind
             self._model_metadata["status"] = "received"
             try:
                 return materialize_selection(result or "", payload, schema)
@@ -678,8 +688,10 @@ def _complete(payload: dict, output_type):
     finally:
         metadata = provider.model_metadata
         # Do not expose arbitrary provider response fields, prompts or request headers.
+        # request_type is a metering label (assessment/packet_prepare/chat), not a secret.
         _metadata.set({key: metadata[key] for key in (
-            "provider", "model_name", "prompt_version", "status", "input_tokens", "output_tokens"
+            "provider", "model_name", "prompt_version", "status", "input_tokens", "output_tokens",
+            "request_type",
         ) if key in metadata})
         pending_error = sys.exc_info()[1]
         if isinstance(pending_error, StudioError):
@@ -1235,7 +1247,11 @@ def rank_job(context: dict) -> dict:
     payload, facts = _context(context)
     if not any(f["kind"] == "job" for f in facts):
         raise StudioError("Add a job description before requesting a match score.")
-    payload.update(operation="rank")
+    payload.update(operation="rank", fit_explanation_contract={
+        "why": "Select claims that support the score from source_facts only.",
+        "evidence": "Each claim is one source_facts id; the server copies text verbatim.",
+        "uncertainty": "Return question keys for missing eligibility, credentials, or career facts.",
+    })
     output = _complete(payload, _RankOutput)
     # Invalid factual claims still fail the operation. Invalid comparisons become
     # unresolved review, not fabricated zero-fit scores or requirement clearance.
@@ -1247,44 +1263,49 @@ def rank_job(context: dict) -> dict:
     eligibility = job.get("eligibility_status") if job.get("eligibility_confirmed") is True else "unknown"
     score, recommendation = output.score, output.recommendation
     questions = credential_questions + _questions(output.questions)
-    lines = ["Fit estimate, not an ATS score or prediction of an interview."]
+    entries = [("why", "Fit estimate, not an ATS score or prediction of an interview.")]
     ledger = {f["id"]: f for f in facts}
+    used = 0
     for claim in output.claims:
         label = "Job posting" if ledger[claim.source_ids[0]]["kind"] == "job" else "Confirmed information"
         line = f"{label}: {claim.text} [{', '.join(claim.source_ids)}]"
-        if sum(map(len, lines)) + len(line) <= 4000:
-            lines.append(line)
+        if used + len(line) <= 4000:
+            entries.append(("evidence", line))
+            used += len(line)
         else:
-            lines.append(f"Additional complete evidence is available in saved source [{claim.source_ids[0]}].")
-    lines.extend(credential_notes)
+            entries.append(("evidence", f"Additional complete evidence is available in saved source [{claim.source_ids[0]}]."))
+    for note in credential_notes:
+        entries.append(("uncertainty", note))
     if credential_guard:
         recommendation = "review"
-        lines.append("This fit estimate is provisional because mandatory or ambiguous requirements still need review.")
+        entries.append(("uncertainty", "This fit estimate is provisional because mandatory or ambiguous requirements still need review."))
     if get_model_metadata().get("rubric_reason_code") == "rubric_contract_invalid":
-        lines.append("The numeric fit estimate is unvalidated, not a pass on any requirement.")
+        entries.append(("uncertainty", "The numeric fit estimate is unvalidated, not a pass on any requirement."))
     preferences = context.get("preferences") or {}
     job_text = str(job.get("description") or "")
     explicit_onsite = job.get("workplace_type") in {"onsite", "hybrid"} or re.search(
         r"\b(?:on[- ]?site|in[- ]office)\s+(?:only|daily|required)|\b(?:must|required to)\s+(?:work|be)\s+(?:on[- ]?site|in[- ]office)", job_text, re.I)
     if preferences.get("remote_preference") == "remote_only" and explicit_onsite:
         recommendation = "review"
-        lines.append("Hard constraint conflict: your remote-only preference conflicts with this posting's onsite/hybrid requirement.")
+        entries.append(("uncertainty", "Hard constraint conflict: your remote-only preference conflicts with this posting's onsite/hybrid requirement."))
         questions.append("This role requires onsite or hybrid work. Do you want to keep your remote-only constraint or explicitly change it?")
     if eligibility == "ineligible":
         score, recommendation = 0.0, "exclude"
-        lines.append("Work eligibility for this job is confirmed ineligible; review if your circumstances change.")
+        entries.append(("uncertainty", "Work eligibility for this job is confirmed ineligible; review if your circumstances change."))
     elif eligibility != "eligible":
         recommendation = "review"
-        lines.append("Work eligibility is unknown, not confirmed ineligible. " + _QUESTIONS["eligibility"])
+        entries.append(("uncertainty", "Work eligibility is unknown, not confirmed ineligible. " + _QUESTIONS["eligibility"]))
         questions.append(_QUESTIONS["eligibility"])
     else:
-        lines.append("Work eligibility is based on your job-specific self-report, not independent employer or legal verification.")
+        entries.append(("uncertainty", "Work eligibility is based on your job-specific self-report, not independent employer or legal verification."))
     if eligibility != "ineligible" and not any(_substantive_candidate_fact(ledger[ref]) for claim in output.claims for ref in claim.source_ids):
         score, recommendation = 0.0, "review"
-        lines.append("Confirm career experience before relying on a match score.")
+        entries.append(("uncertainty", "Confirm career experience before relying on a match score."))
         questions.append(_QUESTIONS["career"])
     pending = _pending_questions(questions, payload)
     if pending:
-        lines.append("Resolve the returned follow-up questions before relying on this recommendation.")
-    return StudioResult({"score": float(score), "recommendation": recommendation, "rationale": "\n".join(lines)},
+        entries.append(("uncertainty", "Resolve the returned follow-up questions before relying on this recommendation."))
+    return StudioResult({"score": float(score), "recommendation": recommendation,
+                         "rationale": rationale_from_entries(entries),
+                         "fit_explanation": explanation_from_entries(entries)},
                         model_metadata=_finish_metadata(), questions=pending)

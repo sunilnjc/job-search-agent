@@ -40,6 +40,8 @@ from .repository import COLUMNS, MobileRepository, SupabaseSettings, _jwt_role
 from .resume_storage import persist_resume, remove_resume, recover_resume, resume_operations
 from .artifact_storage import persist_artifact, recover_artifact, artifact_operations
 from .budgets import PreAuthLimiter, require_mobile_access, reserve_ai_usage
+from .ai_usage import attach_packet_burn, usage_record
+from .fit_explanation import coerce_fit_explanation
 from .schemas import (
     MAX_ARTIFACT_BYTES, MAX_BODY_BYTES, MAX_RESUME_BYTES, MAX_TEXT_CHARS,
     ApplicationCreate, CareerBackground, ChatRequest, ChatResult, EligibilityReview, FollowUpQuestions, JobCreate, JobUpdate,
@@ -248,7 +250,7 @@ async def jobs_with_scores(repo: MobileRepository, item_id: Optional[str] = None
     if summaries:
         columns.remove("description")
     rows = await repo.list("jobs", filters={"id": "eq." + str(item_id)} if item_id else None, params={
-        "select": ",".join(columns) + ",job_scores(score,rationale,created_at)",
+        "select": ",".join(columns) + ",job_scores(score,rationale,fit_explanation,created_at)",
         "job_scores.order": "created_at.desc",
         "job_scores.limit": "1",
         "job_scores.user_id": "eq." + repo.user_id,
@@ -266,6 +268,8 @@ async def jobs_with_scores(repo: MobileRepository, item_id: Optional[str] = None
                 if not math.isfinite(score) or not 0 <= score <= 10 or (rationale is not None and not isinstance(rationale, str)):
                     raise ValueError("Invalid score")
                 row.update(score=score, rationale=rationale[:8000] if rationale is not None else None)
+                row["fit_explanation"] = coerce_fit_explanation(
+                    scores[0].get("fit_explanation"), rationale=rationale)
             except (ValueError, TypeError, KeyError, IndexError):
                 raise HTTPException(502, "The data service returned an invalid score.") from None
     return rows
@@ -430,6 +434,26 @@ def timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def persistable_usage(result: Any, *, operation: str, reservation: Optional[dict] = None) -> dict:
+    """Token/cost/unit snapshot for model_runs. No prompts, emails or secrets."""
+    raw = getattr(result, "model_metadata", None)
+    if not isinstance(raw, dict):
+        raw = result if isinstance(result, dict) else {}
+    reserved = reservation.get("reserved_units") if isinstance(reservation, dict) else None
+    reservation_id = reservation.get("reservation_id") if isinstance(reservation, dict) else None
+    return usage_record(raw, operation=operation, reserved_units=reserved, reservation_id=reservation_id)
+
+
+async def latest_assessment_run(repo: MobileRepository, job_id: str) -> Optional[dict]:
+    try:
+        rows = await repo.list("model_runs", filters={
+            "job_id": "eq." + job_id, "operation": "eq.rank_job", "status": "eq.succeeded",
+        }, limit=1, order="completed_at.desc")
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
 def model_metadata(result: Any) -> dict:
     """Copy only the studio's documented, non-secret provenance fields."""
     raw = getattr(result, "model_metadata", {})
@@ -466,7 +490,8 @@ async def start_run(repo: MobileRepository, operation: str, context: dict, resum
     }))
 
 
-async def fail_run(repo: MobileRepository, model_run: dict, *, questions: Optional[list] = None, metadata: Optional[dict] = None) -> None:
+async def fail_run(repo: MobileRepository, model_run: dict, *, questions: Optional[list] = None,
+                    metadata: Optional[dict] = None, usage: Optional[dict] = None) -> None:
     try:
         data = {
             "status": "failed", "completed_at": timestamp(),
@@ -477,6 +502,8 @@ async def fail_run(repo: MobileRepository, model_run: dict, *, questions: Option
         if metadata:
             data.update(provider=metadata["provider"], model_name=metadata["model_name"])
             data.setdefault("output_summary", {})["model_metadata"] = metadata
+        if usage:
+            data.setdefault("output_summary", {})["usage"] = usage
         await repo.update("model_runs", model_run["id"], data)
     except Exception:
         pass  # Never replace the original safe failure or expose provider errors.
@@ -983,9 +1010,10 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
             all_persisted = False
             try:
                 await bind_preparation_context(repo, model_run["id"], str(body.resume_id), body.variant, snapshot)
-                await reserve_ai_usage(repo, "prepare")
+                reservation = await reserve_ai_usage(repo, "prepare")
                 raw_documents = await run_in_threadpool(adapter.prepare_documents, context, body.variant)
                 metadata = model_metadata(raw_documents)
+                usage = persistable_usage(raw_documents, operation="prepare_documents", reservation=reservation)
                 documents = validate_documents(raw_documents)
                 document_review = validated_document_review(raw_documents)
                 questions = await persist_questions(repo, str(job_id), getattr(raw_documents, "questions", []))
@@ -999,10 +1027,19 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
                         "model_provider": metadata["provider"], "model_name": metadata["model_name"],
                     }, content=document["content"]))
                 all_persisted = True
-                await repo.update("model_runs", model_run["id"], {"status": "succeeded", "completed_at": timestamp(), "provider": metadata["provider"], "model_name": metadata["model_name"],
+                packet = {"prepare_run_id": model_run["id"], "incomplete": True}
+                try:
+                    prepare_audit = {**model_run, "operation": "prepare_documents", "status": "succeeded",
+                                     "completed_at": timestamp(), "output_summary": {"usage": usage}}
+                    packet = attach_packet_burn(prepare_audit, await latest_assessment_run(repo, str(job_id)))
+                except Exception:
+                    prepare_audit = {"completed_at": timestamp()}
+                await repo.update("model_runs", model_run["id"], {"status": "succeeded", "completed_at": prepare_audit.get("completed_at") or timestamp(), "provider": metadata["provider"], "model_name": metadata["model_name"],
                     "output_summary": {"artifact_ids": [row["id"] for row in artifacts], "variant": body.variant,
                         "question_ids": [row["id"] for row in questions],
                         "model_metadata": metadata,
+                        "usage": usage,
+                        "packet_burn": packet,
                         "document_review": document_review,
                         "documents": [{"artifact_id": row["id"], "sha256": hashlib.sha256(doc["content"]).hexdigest()} for row, doc in zip(artifacts, documents)]}})
                 return {"artifacts": artifacts, "questions": questions,
@@ -1012,7 +1049,8 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
                     return {"artifacts": artifacts, "questions": questions,
                             "operation_status": "saved_sync_pending", "model_run_id": model_run["id"],
                             "warnings": ["Your documents are saved. Their activity log could not be synchronized; refresh before regenerating."]}
-                await fail_run(repo, model_run, metadata=model_metadata(exc))
+                await fail_run(repo, model_run, metadata=model_metadata(exc),
+                               usage=persistable_usage(exc, operation="prepare_documents"))
                 if isinstance(exc, HTTPException):
                     if isinstance(exc.detail, dict) and exc.detail.get("operation_id"):
                         raise HTTPException(exc.status_code, detail={**exc.detail,
@@ -1043,9 +1081,10 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
             score_id = str(uuid4())
             score_attempted = False
             try:
-                await reserve_ai_usage(repo, "rank")
+                reservation = await reserve_ai_usage(repo, "rank")
                 raw_result = await run_in_threadpool(adapter.rank_job, context)
                 metadata = model_metadata(raw_result)
+                usage = persistable_usage(raw_result, operation="rank_job", reservation=reservation)
                 provenance = getattr(raw_result, "model_metadata", {})
                 if isinstance(provenance, dict) and provenance.get("status", "validated") != "validated":
                     error = RuntimeError("Unvalidated model ranking")
@@ -1056,13 +1095,13 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
                 score_attempted = True
                 score_row = first_row(await repo.insert("job_scores", {
                     "id": score_id,
-                    "job_id": str(job_id), **result.model_dump(), "model_provider": metadata["provider"], "model_name": metadata["model_name"], "prompt_version": metadata["prompt_version"],
+                    "job_id": str(job_id), **result.model_dump(exclude_none=True), "model_provider": metadata["provider"], "model_name": metadata["model_name"], "prompt_version": metadata["prompt_version"],
                 }))
                 old_status = context["job"]["status"]
                 if old_status in ("new", "matched", "excluded"):
                     new_status = "excluded" if result.recommendation == "exclude" else "matched" if result.recommendation in ("match", "strong_match") else "new"
                     await repo._rows("PATCH", "jobs", filters={"id": "eq." + str(job_id), "status": "eq." + old_status}, data={"status": new_status})
-                await repo.update("model_runs", model_run["id"], {"status": "succeeded", "completed_at": timestamp(), "provider": metadata["provider"], "model_name": metadata["model_name"], "output_summary": {"job_score_id": score_row["id"], **result.model_dump(), "question_ids": [row["id"] for row in questions], "model_metadata": metadata}})
+                await repo.update("model_runs", model_run["id"], {"status": "succeeded", "completed_at": timestamp(), "provider": metadata["provider"], "model_name": metadata["model_name"], "output_summary": {"job_score_id": score_row["id"], **result.model_dump(exclude_none=True), "question_ids": [row["id"] for row in questions], "model_metadata": metadata, "usage": usage}})
                 return first_row(await jobs_with_scores(repo, str(job_id)))
             except Exception as exc:
                 if score_row is None and score_attempted:
@@ -1094,7 +1133,8 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
                     return {**saved, "operation_status": "saved_sync_pending",
                             "warnings": ["Your ranking was saved, but its status or activity log could not be synchronized. Refresh before requesting another ranking."],
                             "model_run_id": model_run["id"]}
-                await fail_run(repo, model_run, metadata=model_metadata(exc))
+                await fail_run(repo, model_run, metadata=model_metadata(exc),
+                               usage=persistable_usage(exc, operation="rank_job"))
                 if isinstance(exc, HTTPException):
                     raise
                 if isinstance(exc, getattr(adapter, "MissingFactsError", ())):
@@ -1109,17 +1149,19 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
             model_run = await start_run(repo, "answer_chat", context, str(body.resume_id) if body.resume_id else None, mode=body.mode)
             questions = []
             try:
-                await reserve_ai_usage(repo, "chat")
+                reservation = await reserve_ai_usage(repo, "chat")
                 raw_result = await run_in_threadpool(adapter.answer_chat, context, body.message, body.mode, [turn.model_dump() for turn in body.history])
                 metadata = model_metadata(raw_result)
+                usage = persistable_usage(raw_result, operation="answer_chat", reservation=reservation)
                 result = ChatResult.model_validate(raw_result)
                 questions = await persist_questions(repo, str(body.job_id) if body.job_id else None, result.questions)
-                await repo.update("model_runs", model_run["id"], {"status": "succeeded", "completed_at": timestamp(), "provider": metadata["provider"], "model_name": metadata["model_name"], "output_summary": {"question_ids": [row["id"] for row in questions], "evidence_count": len(result.evidence), "model_metadata": metadata}})
+                await repo.update("model_runs", model_run["id"], {"status": "succeeded", "completed_at": timestamp(), "provider": metadata["provider"], "model_name": metadata["model_name"], "output_summary": {"question_ids": [row["id"] for row in questions], "evidence_count": len(result.evidence), "model_metadata": metadata, "usage": usage}})
                 return {"reply": result.reply, "evidence": result.evidence, "questions": questions}
             except Exception as exc:
                 # Keep confirmed/pending questions; never delete a reused row
                 # because a later audit write failed.
-                await fail_run(repo, model_run)
+                await fail_run(repo, model_run, metadata=model_metadata(exc),
+                               usage=persistable_usage(exc, operation="answer_chat"))
                 if isinstance(exc, HTTPException):
                     raise
                 if isinstance(exc, getattr(adapter, "MissingFactsError", ())):

@@ -208,10 +208,19 @@ class ChatRequest(InputModel):
     history: List[ChatTurn] = Field(default_factory=list, max_length=12)
 
 
+class FitExplanation(InputModel):
+    """Additive structured assessment. Legacy clients keep using rationale."""
+
+    why: List[Annotated[str, StringConstraints(min_length=1, max_length=2000)]] = Field(default_factory=list, max_length=12)
+    evidence: List[Annotated[str, StringConstraints(min_length=1, max_length=2000)]] = Field(default_factory=list, max_length=16)
+    uncertainty: List[Annotated[str, StringConstraints(min_length=1, max_length=2000)]] = Field(default_factory=list, max_length=16)
+
+
 class RankResult(InputModel):
     score: float = Field(ge=0, le=10, strict=True)
     recommendation: Literal["strong_match", "match", "review", "exclude"]
     rationale: str = Field(min_length=1, max_length=8000)
+    fit_explanation: Optional[FitExplanation] = None
 
 
 class ChatResult(InputModel):
