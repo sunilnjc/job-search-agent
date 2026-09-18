@@ -12,6 +12,7 @@ This file is source-of-truth for this run. The 17 September Mac-local review/han
 | Base reviewed | `main` at `6ea6652` (PR #10, after the handoff HEAD `93cfd1f`) |
 | This branch | `cursor/launch-closure-website-blockers-0e5e` |
 | Fix commit | `f9069bc` |
+| Board commit | `659e18d` |
 | Working tree at start | clean; no uncommitted Mac docs |
 | Secrets in this VM | none (`.env` absent; `.env.example` placeholders only) |
 
