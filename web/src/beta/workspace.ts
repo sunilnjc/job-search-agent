@@ -3,6 +3,14 @@ import type { BetaApplication, BetaJob } from "./types.ts";
 export const WORKSPACE_TABS = ["today", "discover", "studio", "tracker"] as const;
 export type WorkspaceTab = typeof WORKSPACE_TABS[number];
 
+/** User-facing nav labels. Tab id `studio` is the Documents library; Application Studio is the per-role modal. */
+export const WORKSPACE_TAB_LABELS: Record<WorkspaceTab, string> = {
+  today: "Today",
+  discover: "Discover",
+  studio: "Documents",
+  tracker: "Tracker",
+};
+
 export function activeRoles(jobs: BetaJob[]) {
   return jobs.filter(job => !["excluded", "archived", "applied"].includes(job.status));
 }

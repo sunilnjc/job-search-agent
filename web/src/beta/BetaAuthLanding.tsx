@@ -19,13 +19,18 @@ type BetaAuthLandingProps = {
  * The beta intentionally uses one passwordless email flow for both account
  * creation and returning sign-in. The two modes are a clear user-facing
  * explanation, not two different sources of truth or password stores.
+ * Privacy intent is a separate callout, not a silent override of Sign in.
  */
 export function BetaAuthLanding({ notice, error, onNotice, onError, privacyIntent = false, onPrivacyIntentChange }: BetaAuthLandingProps) {
-  const [mode, setMode] = useState<AuthMode>("signup");
+  const [mode, setMode] = useState<AuthMode>(privacyIntent ? "signin" : "signup");
   const [email, setEmail] = useState("");
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [retryAfter, setRetryAfter] = useState(0);
+
+  useEffect(() => {
+    if (privacyIntent) setMode("signin");
+  }, [privacyIntent]);
 
   useEffect(() => {
     if (retryAfter <= 0) return;
@@ -69,6 +74,14 @@ export function BetaAuthLanding({ notice, error, onNotice, onError, privacyInten
     onError(null);
   };
 
+  const enterPrivacy = () => {
+    setMode("signin");
+    setSentTo(null);
+    onPrivacyIntentChange?.(true);
+    onNotice(null);
+    onError(null);
+  };
+
   return (
     <main className="beta-auth-page">
       <section className="beta-auth-brand" aria-label="The Job Pursuit overview">
@@ -89,18 +102,23 @@ export function BetaAuthLanding({ notice, error, onNotice, onError, privacyInten
       <section className="beta-auth-panel" aria-labelledby="beta-auth-title">
         <a className="beta-auth-mobile-wordmark" href="/beta" aria-label="The Job Pursuit home"><BrandIdentity /></a>
         <div className="beta-auth-mode-tabs" role="group" aria-label="Account action">
-          <button type="button" disabled={sending} aria-pressed={mode === "signup"} className={mode === "signup" ? "is-active" : ""} onClick={() => switchMode("signup")}>Create account</button>
-          <button type="button" disabled={sending} aria-pressed={mode === "signin"} className={mode === "signin" ? "is-active" : ""} onClick={() => switchMode("signin")}>Sign in</button>
+          <button type="button" disabled={sending} aria-pressed={mode === "signup" && !privacyIntent} className={mode === "signup" && !privacyIntent ? "is-active" : ""} onClick={() => switchMode("signup")}>Create account</button>
+          <button type="button" disabled={sending} aria-pressed={mode === "signin" && !privacyIntent} className={mode === "signin" && !privacyIntent ? "is-active" : ""} onClick={() => switchMode("signin")}>Sign in</button>
         </div>
+
+        {privacyIntent && <div className="beta-auth-privacy-callout" role="status">
+          <p><strong>Privacy controls</strong> — export or erase an existing account. This is not account creation. Paid workspace access is not required.</p>
+          <button type="button" className="beta-auth-link-button" disabled={sending} onClick={() => onPrivacyIntentChange?.(false)}>Back to sign in</button>
+        </div>}
 
         {!sentTo ? <>
           <header className="beta-auth-panel-heading">
             <h2 id="beta-auth-title">{privacyIntent ? "Sign in to manage account privacy." : mode === "signup" ? "Start with your career, not another form." : "Welcome back."}</h2>
-            <p>{privacyIntent ? "Verify your existing account to request an export or erasure. Paid workspace access is not required. If the sign-in link opens a new tab, choose Account privacy after signing in." : mode === "signup" ? "Create your private workspace in a few focused steps." : "Use the email connected to your workspace."}</p>
+            <p>{privacyIntent ? "Use the email on your existing Job Pursuit account. After you open the link, choose Account privacy in your profile. If the link opens a new tab, sign in there first." : mode === "signup" ? "Create your private workspace in a few focused steps." : "Use the email connected to your workspace."}</p>
           </header>
           <form className="beta-auth-form" onSubmit={(event) => void send(event)}>
             <label>Email address<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
-            <button className="beta-auth-email-action" disabled={sending || retryAfter > 0}>{sending ? "Sending secure link…" : mode === "signup" ? "Create account with email" : "Continue with email"}</button>
+            <button className="beta-auth-email-action" disabled={sending || retryAfter > 0}>{sending ? "Sending secure link…" : privacyIntent ? "Email a privacy sign-in link" : mode === "signup" ? "Create account with email" : "Continue with email"}</button>
           </form>
           <p className="beta-auth-no-password">No password to create or remember. We email a secure sign-in link.</p>
         </> : <div className="beta-auth-confirmation" role="status">
@@ -114,7 +132,8 @@ export function BetaAuthLanding({ notice, error, onNotice, onError, privacyInten
         </div>}
 
         <div className="beta-auth-security"><span aria-hidden="true">⌁</span><p>Your personal profile and documents remain private to your account. We never submit an application without your approval.</p></div>
-        <button type="button" className="beta-auth-link-button" disabled={sending} onClick={() => { setMode("signin"); setSentTo(null); onPrivacyIntentChange?.(true); onNotice(null); onError(null); }}>Account privacy — export or erasure</button>
+        {!privacyIntent && <button type="button" className="beta-auth-link-button" disabled={sending} onClick={enterPrivacy}>Need export or erasure? Open privacy sign-in</button>}
+        <p className="beta-auth-legal">By continuing you agree to receive a one-time sign-in email. {trustPageEnabled ? <a href="/beta/trust">Trust and privacy</a> : "Privacy export and erasure controls are available after sign-in under Your profile."} Terms for a public launch will be published separately.</p>
         {notice && <p className="beta-notice" role="status">{notice}</p>}
         {error && <p className="beta-error" role="alert">{error}</p>}
       </section>

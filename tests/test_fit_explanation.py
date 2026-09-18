@@ -16,7 +16,7 @@ class FitExplanationTests(unittest.TestCase):
             "score": 8.0, "recommendation": "match", "rationale": "Fit estimate, not an ATS score.",
             "fit_explanation": {
                 "why": ["Fit estimate, not an ATS score."],
-                "evidence": ["Confirmed information: Led a clinic team [career_text.0]"],
+                "evidence": ["Confirmed information: Led a clinic team"],
                 "uncertainty": ["Work eligibility is unknown, not confirmed ineligible."],
             },
         })
@@ -31,9 +31,10 @@ class FitExplanationTests(unittest.TestCase):
         rationale = rationale_from_entries(entries)
         self.assertIn("Fit estimate", rationale)
         self.assertIn("Confirmed information", rationale)
+        self.assertNotIn("career_text.0", rationale)
         shape = explanation_from_entries(entries)
         self.assertEqual(shape["why"][0][:12], "Fit estimate")
-        self.assertTrue(shape["evidence"][0].startswith("Confirmed information"))
+        self.assertEqual(shape["evidence"][0], "Confirmed information: Ran community clinics")
         self.assertIn("unknown", shape["uncertainty"][0])
 
     def test_legacy_rationale_fallback_and_invalid_json(self):
@@ -44,8 +45,9 @@ class FitExplanationTests(unittest.TestCase):
         )
         fallback = fit_explanation_from_rationale(rationale)
         self.assertTrue(fallback["why"])
-        self.assertTrue(fallback["evidence"])
+        self.assertEqual(fallback["evidence"], ["Confirmed information: Built reports"])
         self.assertTrue(fallback["uncertainty"])
+        self.assertNotIn("career_text", fallback["evidence"][0])
         self.assertIsNone(validated_fit_explanation("not-an-object"))
         self.assertIsNone(validated_fit_explanation({"why": [], "evidence": [], "uncertainty": []}))
         coerced = coerce_fit_explanation({"why": ["Kept"], "evidence": [], "uncertainty": [], "extra": "drop"},
@@ -58,7 +60,10 @@ class FitExplanationTests(unittest.TestCase):
         with self.assertRaises(Exception):
             FitExplanation(why=["x" * 2001], evidence=[], uncertainty=[])
         self.assertEqual(explanation_shape(["  Why  "], [], []), {"why": ["Why"], "evidence": [], "uncertainty": []})
-
+        self.assertEqual(
+            explanation_shape(["Confirmed information: Built reports [career_text.0]"], [], []),
+            {"why": ["Confirmed information: Built reports"], "evidence": [], "uncertainty": []},
+        )
 
 if __name__ == "__main__":
     unittest.main()

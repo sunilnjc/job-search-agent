@@ -22,8 +22,10 @@ import { discoveryContextKey } from "./discovery";
 import type { DiscoverySnapshot } from "./discovery";
 import { BillingPanel } from "./BillingPanel";
 import { billingReturnLocation, billingRouteRequested } from "./billing";
+import { consumeAuthRedirectError } from "./authRedirect";
 import { isTrustPath, trustPageEnabled } from "./trustPage";
 import { TrustPageUnpublished, TrustSafetyPage } from "./TrustSafetyPage";
+import { WORKSPACE_TAB_LABELS } from "./workspace";
 import "./beta.css";
 import "./pursuit-theme.css";
 
@@ -49,6 +51,12 @@ function BetaSession() {
   const [privacyIntent, setPrivacyIntent] = useState(false);
 
   const priorUser = useRef<string | null>(null);
+  const authRedirectError = useRef<string | null>(null);
+
+  useEffect(() => {
+    authRedirectError.current = consumeAuthRedirectError();
+    if (authRedirectError.current) setError(authRedirectError.current);
+  }, []);
 
   useEffect(() => {
     if (!betaEnabled) return;
@@ -63,16 +71,22 @@ function BetaSession() {
       setSession(nextSession);
       setAuthState(nextSession ? "signed_in" : "signed_out");
       setNotice(null);
-      setError(null);
+      if (nextSession) {
+        authRedirectError.current = null;
+        setError(null);
+      } else {
+        setError(authRedirectError.current);
+      }
     });
     client.auth.getSession().then(({ data, error: sessionError }) => {
       if (!active || authEventReceived) return;
-      if (sessionError) setError("We could not restore your session. Please sign in again.");
+      if (sessionError) setError(authRedirectError.current || "We could not restore your session. Please sign in again.");
+      else if (!data.session && authRedirectError.current) setError(authRedirectError.current);
       priorUser.current = data.session?.user.id ?? null;
       setSession(data.session);
       setAuthState(data.session ? "signed_in" : "signed_out");
     }).catch(() => {
-      if (active && !authEventReceived) { setError("We could not check your session. Please try signing in again."); setAuthState("signed_out"); }
+      if (active && !authEventReceived) { setError(authRedirectError.current || "We could not check your session. Please try signing in again."); setAuthState("signed_out"); }
     });
     return () => { active = false; subscription.subscription.unsubscribe(); };
   }, []);
@@ -182,12 +196,12 @@ function SignedInWorkspace({ session, initialPrivacy = false }: { session: Sessi
       <div id="pursuit-workspace" tabIndex={-1}>
       {view === "today" && <TodayHome profile={profile} jobs={jobs} applications={applications} onNavigate={setView} onOpenJob={setDetailJob} />}
       {view === "discover" && <Today key={discoveryContextKey(session.user.id, profile, preferences)} profile={profile} snapshot={discoverySnapshot} onSnapshot={setDiscoverySnapshot} onReviewResume={() => setView("studio")} readyJobs={groups.ready} needsReview={groups.review} allJobs={jobs} userId={session.user.id} preferences={preferences} onEditPreferences={() => setEditing(true)} onViewApplications={() => setView("tracker")} onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} onJobsChanged={async () => { if (!await loadWorkspace()) throw new Error("Saved roles could not refresh. The completed save was not undone."); }} />}
-      {view === "tracker" && <section className="beta-content"><ApplicationsWorkspace jobs={jobs} applications={applications} onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} /></section>}
-      {view === "studio" && <section className="beta-content"><header className="pursuit-page-heading"><p className="beta-eyebrow">Studio</p><h1>Your experience, in focus.</h1><p>A private home for your source resumes and application materials.</p></header><DocumentsPanel session={session} onDiscover={() => setView("discover")} onChanged={async () => { await loadWorkspace(); }} /><div className="pursuit-note"><h2>Build on what’s true</h2><p>Confirm your career facts, then find suitable roles in Discover. Open a saved role to assess fit, answer questions and prepare documents. You review and apply externally yourself.</p><button className="beta-text-button" onClick={() => setView("profile")}>Review your profile →</button></div><JobSection title="Choose a role to prepare" jobs={activeRoles(jobs)} empty="Save a role in Discover to open its application workspace." onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} /></section>}
+      {view === "tracker" && <section className="beta-content"><ApplicationsWorkspace jobs={jobs} applications={applications} onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} onFindRoles={() => setView("discover")} /></section>}
+      {view === "studio" && <section className="beta-content"><header className="pursuit-page-heading"><p className="beta-eyebrow">Documents</p><h1>Your experience, in focus.</h1><p>A private home for your source resumes. Open a saved role’s Application Studio to assess fit and prepare drafts.</p></header><DocumentsPanel session={session} onDiscover={() => setView("discover")} onChanged={async () => { await loadWorkspace(); }} /><div className="pursuit-note"><h2>Build on what’s true</h2><p>Confirm your career facts, then find suitable roles in Discover. Open a saved role to assess fit, answer questions and prepare documents. You review and apply externally yourself.</p><button className="beta-text-button" onClick={() => setView("profile")}>Review your profile →</button></div><JobSection title="Choose a role to prepare" jobs={activeRoles(jobs)} empty="Save a role in Discover to open its Application Studio." onOpenStudio={setStudioJob} onOpenDetail={setDetailJob} /></section>}
       {view === "profile" && <><ProfileSummary profile={profile} preferences={preferences} onEdit={() => setEditing(true)} onDocuments={() => setView("studio")} /><section className="beta-content"><div className="pursuit-note"><h2>Your account privacy</h2><p>Request a data export or account erasure and check its status. These controls are separate from workspace subscriptions.</p><button className="beta-secondary" onClick={() => setPrivacyOpen(true)}>Account privacy</button></div><div className="pursuit-note"><h2>Operator billing tests</h2><p>Check service-reported test billing and, when configured, open a Stripe test checkout or portal. This is not a live subscription offer.</p><button className="beta-secondary" onClick={() => setBillingOpen(true)}>Billing test mode</button></div></section></>}
       </div>
       <nav className="beta-navigation" aria-label="Primary navigation">
-        {WORKSPACE_TABS.map((item) => <button key={item} className={view === item ? "active" : ""} aria-current={view === item ? "page" : undefined} onClick={() => setView(item)}><WorkspaceIcon name={item} /><span>{item[0].toUpperCase() + item.slice(1)}</span></button>)}
+        {WORKSPACE_TABS.map((item) => <button key={item} className={view === item ? "active" : ""} aria-current={view === item ? "page" : undefined} onClick={() => setView(item)}><WorkspaceIcon name={item} /><span>{WORKSPACE_TAB_LABELS[item]}</span></button>)}
       </nav>
       {studioJob && <WorkspaceDialog className="beta-studio-overlay" label={`Application studio for ${studioJob.title}`} onClose={closeStudio}><div className="beta-studio-modal"><button className="beta-text-button beta-studio-close" onClick={closeStudio}>Close</button><ApplicationStudio session={session} job={studioJob} onApplicationStatusChange={async () => {
         await loadWorkspace();

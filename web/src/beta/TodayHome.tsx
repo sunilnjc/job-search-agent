@@ -43,10 +43,10 @@ export function TodayHome({ profile, jobs, applications, onNavigate, onOpenJob }
       </div>
     </div>
     <section className="pursuit-recent" aria-labelledby="pursuit-recent-title">
-      <div className="pursuit-section-heading"><div><h2 id="pursuit-recent-title">Pick up where you left off</h2><p>Your explicitly saved roles. Discover can search configured public boards; Studio helps you assess and prepare after saving.</p></div><button className="beta-text-button" onClick={() => onNavigate("discover")}>See all</button></div>
+      <div className="pursuit-section-heading"><div><h2 id="pursuit-recent-title">Pick up where you left off</h2><p>Your explicitly saved roles. Discover can search configured public boards; Application Studio helps you assess and prepare after saving.</p></div><button className="beta-text-button" onClick={() => onNavigate("discover")}>See all</button></div>
       {roles.length ? <div className="pursuit-opportunities">{roles.slice(0, 2).map(job => <button className="pursuit-opportunity" key={job.id} onClick={() => onOpenJob(job)}>
         <div className="pursuit-company"><span className="pursuit-company-mark" aria-hidden="true">{job.company_name.slice(0, 2).toUpperCase()}</span><span><strong>{job.company_name}</strong><small>{job.location_text || "Location not listed"}</small></span><WorkspaceIcon name="arrow" /></div>
-        <h3>{job.title}</h3><span className="pursuit-chip">{job.eligibility_status === "eligible" ? "Eligibility recorded" : "Eligibility to verify"}</span>
+        <h3>{job.title}</h3><span className="pursuit-chip">{job.eligibility_status === "eligible" ? "Work rights recorded" : "Work rights to verify"}</span>
       </button>)}</div> : <div className="beta-empty"><h3>Find your first promising role</h3><p>Open Discover to find recommendations. Save a role to review its fit and prepare your application.</p><button className="beta-secondary" onClick={() => onNavigate("discover")}>Explore recommendations</button></div>}
     </section>
   </section>;

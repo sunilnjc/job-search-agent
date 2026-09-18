@@ -172,7 +172,7 @@ def main():
 
         context, page, state, base = privacy_context(browser, signed_in=False)
         page.goto(fixture.BASE)
-        page.get_by_role("button", name="Account privacy — export or erasure", exact=True).click()
+        page.get_by_role("button", name="Need export or erasure? Open privacy sign-in", exact=True).click()
         expect(page.get_by_role("heading", name="Sign in to manage account privacy.", exact=True)).to_be_visible()
         expect(page.get_by_role("button", name="Continue with email", exact=True)).to_be_visible()
         assert state["gets"] == 0 and not state["writes"]

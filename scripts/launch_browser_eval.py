@@ -115,7 +115,7 @@ def run_persona(browser,p):
         expect(page.get_by_text('This beta does not generate documents in this screen.',exact=False)).to_be_visible()
         page.get_by_role('tab',name='Questions',exact=True).click()
         expect(page.get_by_text('does not yet collect, answer, or submit employer questions',exact=False)).to_be_visible()
-        page.get_by_role('tab',name='Final review',exact=True).click()
+        page.get_by_role('tab',name='Final check',exact=True).click()
         result['final_review']=page.locator('.beta-application-studio').inner_text()
         page.screenshot(path=str(OUT/f"{p['id']}-stuck-final-review.png"),full_page=True)
         result['steps'].append('documents/questions/final review reached; preparation blocked by missing integrations')

@@ -1294,12 +1294,12 @@ def rank_job(context: dict) -> dict:
     used = 0
     for claim in output.claims:
         label = "Job posting" if ledger[claim.source_ids[0]]["kind"] == "job" else "Confirmed information"
-        line = f"{label}: {claim.text} [{', '.join(claim.source_ids)}]"
+        line = f"{label}: {claim.text}"
         if used + len(line) <= 4000:
             entries.append(("evidence", line))
             used += len(line)
         else:
-            entries.append(("evidence", f"Additional complete evidence is available in saved source [{claim.source_ids[0]}]."))
+            entries.append(("evidence", "Additional complete evidence is available in saved sources."))
     for note in credential_notes:
         entries.append(("uncertainty", note))
     if credential_guard:

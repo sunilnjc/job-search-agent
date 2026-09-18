@@ -251,7 +251,7 @@ def assert_strict_preferences(preferences):
 
 
 def final_review(page, packet=None):
-    page.get_by_role("button", name="Final review", exact=True).click()
+    page.get_by_role("button", name="Final check", exact=True).click()
     ready = page.get_by_role("button", name="Mark ready for manual apply", exact=True)
     expect(ready).to_be_disabled()
     if packet:
@@ -374,7 +374,7 @@ def main():
             assert len(state["readiness_reads"]) >= 3, "Opening, click-boundary verification and post-save refresh must read readiness"
             # No new review consent or write should be required after reloading.
             open_studio(page)
-            page.get_by_role("button", name="Final review", exact=True).click()
+            page.get_by_role("button", name="Final check", exact=True).click()
             expect(review_checkbox(page)).to_be_checked()
             expect(review_checkbox(page)).to_be_disabled()
             expect(page.get_by_text(re.compile(r"^Your review of this exact packet is saved and current"))).to_be_visible()

@@ -246,7 +246,7 @@ def run_persona(browser, persona, width):
                 (OUT / (persona["id"] + "-" + artifact_name)).write_bytes(
                     remote.objects[("application-artifacts", artifact["storage_path"])]
                 )
-            page.get_by_role("navigation", name="Application preparation steps").get_by_role("button", name="Final review", exact=True).click()
+            page.get_by_role("navigation", name="Application preparation steps").get_by_role("button", name="Final check", exact=True).click()
             ready_button = page.get_by_role("button", name="Mark ready for manual apply")
             expect(ready_button).to_be_disabled()
             packet_select = page.get_by_role("combobox", name=re.compile("^Document packet"))

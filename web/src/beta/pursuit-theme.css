@@ -166,7 +166,9 @@ body:has(.pursuit-web) { background: #F4F0E8; }
 .pursuit-web .beta-auth-panel-heading p, .pursuit-web .beta-auth-no-password, .pursuit-web .beta-auth-confirmation > p, .pursuit-web .beta-auth-security :is(p,span) { color: var(--beta-muted); }
 .pursuit-web .beta-auth-no-password, .pursuit-web .beta-auth-security p, .pursuit-web .beta-auth-brand-footnote { font-size: .8rem; }
 .pursuit-web .beta-auth-confirmation-icon { background: var(--beta-surface-strong); color: var(--beta-text); }
-.pursuit-web .beta-auth-security { border-color: var(--beta-border); }
+.pursuit-web .beta-auth-privacy-callout { border-color: var(--beta-border); background: var(--beta-surface-strong); }
+.pursuit-web .beta-auth-privacy-callout p, .pursuit-web .beta-auth-legal { color: var(--beta-muted); }
+.pursuit-web .beta-auth-legal a { color: var(--beta-text); text-decoration: underline; }
 .pursuit-skip { position: fixed; top: 16px; left: 16px; z-index: 100; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; color: var(--beta-text); background: var(--beta-surface); }
 .pursuit-skip:focus { width: auto; height: auto; overflow: visible; clip-path: none; padding: 14px; }
 .pursuit-web .pursuit-dialog { width: 100vw; height: 100svh; max-width: none; max-height: none; margin: 0; border: 0; color: var(--beta-text); }

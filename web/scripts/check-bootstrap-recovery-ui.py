@@ -148,7 +148,7 @@ def run_case(browser, width, recovery):
 
         if recovery == "unknown":
             row = page.locator(".beta-applications-workspace-row").filter(has=page.get_by_role("heading", name=fixture.JOB["title"], exact=True))
-            row.get_by_role("button", name="Open studio", exact=True).click()
+            row.get_by_role("button", name="Application Studio", exact=True).click()
             expect(page.get_by_role("textbox", name="Full job description", exact=True)).to_have_value(fixture.JOB["description"])
             ready = fixture.final_review(page, recovered["readiness"]["packets"][0])
             # Download and acknowledge the actual fixture pair. Even full local

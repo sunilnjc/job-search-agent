@@ -12,12 +12,19 @@ export type JobDetailWorkspaceProps = {
 
 function labelForEligibility(status: BetaJob["eligibility_status"]) {
   const labels: Record<BetaJob["eligibility_status"], string> = {
-    eligible: "Eligibility recorded — review in Studio",
+    eligible: "Work rights recorded",
     ineligible: "Not currently eligible",
-    needs_review: "Eligibility needs review",
-    unknown: "Eligibility not checked yet",
+    needs_review: "Work rights need your review",
+    unknown: "Work rights not recorded yet",
   };
   return labels[status];
+}
+
+function eligibilityNextStep(status: BetaJob["eligibility_status"]) {
+  if (status === "eligible") return "Your work-rights self-report is saved for this role. Re-check it if the posting or your situation changes.";
+  if (status === "ineligible") return "You recorded that you are not eligible for this role. Update that self-report in Application Studio if it changes.";
+  if (status === "needs_review") return "Open Application Studio and answer the work-rights question for this posting.";
+  return "Open Application Studio to record whether you can work in this location. AI cannot confirm work rights.";
 }
 
 function labelForWorkplace(workplace: BetaJob["workplace_type"]) {
@@ -92,11 +99,13 @@ export function JobDetailWorkspace({ job, onClose, onOpenStudio }: JobDetailWork
           <section className="beta-job-detail-section" aria-labelledby={`job-detail-match-${job.id}`}>
             <div className="beta-job-detail-section-heading">
               <p className="beta-job-detail-kicker">02</p>
-              <h3 id={`job-detail-match-${job.id}`}>Match &amp; eligibility</h3>
+              <h3 id={`job-detail-match-${job.id}`}>Match &amp; work rights</h3>
             </div>
-            <p className="beta-job-detail-status-copy">{labelForEligibility(job.eligibility_status)}.</p>
+            <p className="beta-job-detail-status-copy">{labelForEligibility(job.eligibility_status)}</p>
+            <p className="beta-job-detail-muted">{eligibilityNextStep(job.eligibility_status)}</p>
+            <p className="beta-job-detail-status-copy" style={{ marginTop: 14 }}>AI role fit</p>
             <p className="beta-job-detail-muted">
-              {job.score != null ? assessmentDisplay(job) : "Open Studio to assess this role against your selected resume and confirmed career facts."} This is not an ATS score, hiring probability or independent verification of work rights.
+              {job.score != null ? assessmentDisplay(job) : "Open Application Studio to compare this role with your selected resume and confirmed career facts."} This is not an ATS score, hiring probability, or work-rights verification.
             </p>
             {job.score != null && <FitExplanationBlock job={job} />}
           </section>
@@ -107,7 +116,7 @@ export function JobDetailWorkspace({ job, onClose, onOpenStudio }: JobDetailWork
               <h3 id={`job-detail-preparation-${job.id}`}>Preparation</h3>
             </div>
             <p className="beta-job-detail-muted">
-              Open Studio to fetch the full saved description, edit requirements, explicitly review eligibility, answer questions and prepare draft documents. You review and apply on the employer’s site yourself.
+              Open Application Studio to review the saved description, record work rights, answer questions, and prepare draft documents. You review and apply on the employer’s site yourself.
             </p>
             <button className="beta-job-detail-primary-action" type="button" onClick={() => onOpenStudio(job)}>
               Open Application Studio

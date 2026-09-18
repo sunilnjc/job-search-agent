@@ -17,11 +17,29 @@ import "./studio-workflow.css";
 
 type Step = "overview" | "documents" | "questions" | "review";
 type Props = { session: Session; job: BetaJob; onApplicationStatusChange?: (application: BetaApplication) => void | Promise<void> };
-const STEPS: Array<[Step, string]> = [["overview", "Role & eligibility"], ["documents", "Documents"], ["questions", "Questions"], ["review", "Final review"]];
+const STEPS: Array<[Step, string]> = [["overview", "Job & work rights"], ["documents", "Documents"], ["questions", "Your answers"], ["review", "Final check"]];
 function documentLabel(artifact: BetaArtifact) {
   const kind = ({ tailored_resume: "Tailored resume", cover_letter: "Cover letter", answer_packet: "Answer packet" } as Record<string, string>)[artifact.kind] ?? "Application document";
   const format = artifact.filename.toLowerCase().endsWith(".docx") ? "DOCX" : artifact.filename.toLowerCase().endsWith(".pdf") ? "PDF" : "File";
   return `${kind} · ${format}`;
+}
+
+function assessBlockReason(opts: {
+  consent: boolean; resume: boolean; careerText: boolean; description: boolean; dirty: boolean;
+  aiHold: boolean; recoveryOk: boolean; recoveryPhase: string;
+}): string | null {
+  if (!opts.careerText) return "Confirm your career facts in Documents or your profile before assessing.";
+  if (!opts.description) return "Add or save the full job description in Job & work rights first.";
+  if (opts.dirty) return "Save your edited job description before assessing.";
+  if (!opts.resume) return "Choose a source resume above.";
+  if (!opts.consent) return "Enable AI assistance for this role to unlock Assess.";
+  if (!opts.recoveryOk) {
+    return opts.recoveryPhase !== "checked"
+      ? "Pending document recovery is still checking. Use Check pending artifact operations below."
+      : "Resolve pending document recovery below before assessing. Assess stays blocked while recovery is unresolved.";
+  }
+  if (opts.aiHold) return "A previous AI save is still synchronizing. Refresh saved Studio before assessing again.";
+  return null;
 }
 
 export function ApplicationStudio(props: Props) {
@@ -125,6 +143,14 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
   const newPreparationApproved = newPreparationAcknowledged(recovery, scope, resumeId, freshSourceId, workspace.resumes.map(resume => resume.id), acknowledgedOperations);
   const canAnalyze = analysisContextReady && !aiHold && recoveryClear(recovery, scope);
   const canPrepare = analysisContextReady && ((!aiHold && recoveryClear(recovery, scope)) || newPreparationApproved);
+  const analyzeBlocked = assessBlockReason({
+    consent, resume: Boolean(selectedResume), careerText: Boolean(workspace.profile?.career_text?.trim()),
+    description: Boolean(description.trim()), dirty, aiHold, recoveryOk: recoveryClear(recovery, scope),
+    recoveryPhase: recovery.phase,
+  });
+  const prepareBlocked = canPrepare ? null : (analyzeBlocked || (missingBytesConfirmed && !newPreparationApproved
+    ? "Acknowledge every missing-file operation below, or resolve recovery, before preparing drafts."
+    : analyzeBlocked));
   const packets = serverStudioPackets(serverReadiness, resumeId, variant);
   const packet = packets.find(item => item.key === packetKey);
   const contextKey = studioContextKey(userId, workspace, job, resumeId, variant);
@@ -214,7 +240,7 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
     } finally { setRecoveryKey(current => current + 1); }
   });
   return <section className="beta-application-studio workflow" aria-label="Application Studio">
-    <header className="beta-application-studio__header"><p className="beta-eyebrow">Application Studio · manual preparation</p><h2>{job.title}</h2><p>{job.company_name} · {job.location_text || "Location not listed"}</p><p>Application record: {serverReadiness?.application_id ? serverReadiness.application_status : application?.status ?? "Not created"}. Ready requires a current reviewed packet. Submitted is user-reported, not verified by an employer. No automatic submission.</p>{postingUrl && <a href={postingUrl} target="_blank" rel="noreferrer">Open original posting ↗</a>}</header>
+    <header className="beta-application-studio__header"><p className="beta-eyebrow">Application Studio · manual preparation</p><h2>{job.title}</h2><p>{job.company_name} · {job.location_text || "Location not listed"}</p><p>Application record: {serverReadiness?.application_id ? serverReadiness.application_status : application?.status ?? "Not started yet"}. Ready requires a current reviewed packet. Submitted is user-reported, not verified by an employer. No automatic submission.</p>{postingUrl && <a href={postingUrl} target="_blank" rel="noreferrer">Open original posting ↗</a>}</header>
     <nav className="beta-application-studio__steps" aria-label="Application preparation steps">{STEPS.map(([id, label]) => <button key={id} aria-current={step === id ? "step" : undefined} className={step === id ? "is-active" : ""} onClick={() => setStep(id)}>{label}{id === "questions" && pending.length ? ` (${pending.length})` : ""}</button>)}</nav>
     {error && <p className="beta-error" role="alert">{error}</p>}{notice && <p className="beta-notice" role="status">{notice}</p>}
     {syncWarning && <p className="beta-notice" role="status">{syncWarning}</p>}
@@ -226,7 +252,7 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
         await mobileRequest(userId, `/jobs/${job.id}`, { method: "PATCH", signal: request.current.signal, body: { description: description.trim() } });
         invalidateReview(); setConfirmed(false); setEligibility(""); setReason(""); await load(); setNotice("Job description saved. Changed role facts invalidate the previous match and eligibility review; old documents remain for your review.");
       }); }}>
-        <h3>Job description</h3><p>Paste the employer’s full requirements. We do not fetch this URL or verify whether the vacancy is still open.</p>
+        <h3>Job description</h3><p>{description.trim() ? "Review or edit the saved posting text. We do not reopen the employer link or verify whether the role is still open." : "Paste the employer’s full requirements. We do not fetch this URL or verify whether the vacancy is still open."}</p>
         <label>Full job description<textarea required maxLength={80000} rows={10} value={description} disabled={busy} onChange={event => { setDescription(event.target.value); invalidateReview(); }} /></label>
         <button className="beta-secondary" disabled={busy || !dirty || !description.trim()}>Save job description</button>
       </form>
@@ -235,7 +261,7 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
         await mobileRequest(userId, `/jobs/${job.id}/eligibility`, { method: "POST", signal: request.current.signal, body: { status: eligibility, reason: reason.trim(), confirmed: true } });
         invalidateReview(); await load(); setConfirmed(false); setNotice("Your job-specific self-report was saved. It is not independently verified.");
       }); }}>
-        <h3>Work eligibility · your self-report</h3>
+        <h3>Work rights · your self-report</h3>
         <p>Current review: {job.eligibility_review?.status ?? "Not recorded"}. {job.eligibility_review?.reason}</p>
         <p>Review the posting and your actual work rights. Neither AI nor a free-text answer can approve legal eligibility. If uncertain, choose unknown and verify with the employer or a qualified adviser.</p>
         <label>Your eligibility status<select required value={eligibility} disabled={busy || dirty} onChange={event => { setEligibility(event.target.value as typeof eligibility); setConfirmed(false); }}><option value="">Choose explicitly</option><option value="eligible">I report that I am eligible</option><option value="ineligible">I report that I am not eligible</option><option value="unknown">Unknown — needs verification</option></select></label>
@@ -257,6 +283,8 @@ function StudioSession({ session, job: summaryJob, onApplicationStatusChange }: 
           {recovery.operations.map(operation => <label className="workflow-check" key={operation.id}><input type="checkbox" disabled={!freshSourceId || freshSourceId !== resumeId || !selectedResume} checked={acknowledgedOperations.includes(operation.id)} onChange={event => setAcknowledgedOperations(current => event.target.checked ? [...current.filter(id => id !== operation.id), operation.id] : current.filter(id => id !== operation.id))} /><span>I acknowledge missing file {operation.filename} (operation {operation.id}). With my explicitly selected source, I choose one new paid AI preparation while this old journal stays unresolved.</span></label>)}
         </fieldset>}
         <div className="workflow-actions"><button className="beta-secondary" disabled={busy || !canAnalyze} onClick={() => void analyze("rank")}>Assess role with AI</button><button className="beta-primary" disabled={busy || !canPrepare} onClick={() => void analyze("prepare")}>Prepare draft documents</button></div>
+        {!canAnalyze && analyzeBlocked && <p className="beta-notice" role="status">{analyzeBlocked}</p>}
+        {canAnalyze && !canPrepare && prepareBlocked && <p className="beta-notice" role="status">{prepareBlocked}</p>}
         {job.score != null && <><p>{assessmentDisplay(job)}</p><FitExplanationBlock job={job} /></>}
       </div>
       <DocumentReviewPanel userId={userId} jobId={job.id} refreshKey={artifacts.map(artifact => artifact.id).join(":")} />

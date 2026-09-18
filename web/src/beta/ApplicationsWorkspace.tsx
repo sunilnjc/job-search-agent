@@ -7,6 +7,7 @@ export type ApplicationsWorkspaceProps = {
   applications: BetaApplication[];
   onOpenDetail: (job: BetaJob) => void;
   onOpenStudio: (job: BetaJob) => void;
+  onFindRoles?: () => void;
 };
 
 type StatusFilter = "all" | "draft" | "submitted" | "interviewing" | "closed";
@@ -32,7 +33,7 @@ function workplaceLabel(workplace: BetaJob["workplace_type"]) {
  * Application progress comes from applications.status, never a saved job label.
  * Retain history even when a job falls outside the workspace's loaded page.
  */
-export function ApplicationsWorkspace({ jobs, applications, onOpenDetail, onOpenStudio }: ApplicationsWorkspaceProps) {
+export function ApplicationsWorkspace({ jobs, applications, onOpenDetail, onOpenStudio, onFindRoles }: ApplicationsWorkspaceProps) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const counts = applicationCounts(applications);
@@ -84,7 +85,8 @@ export function ApplicationsWorkspace({ jobs, applications, onOpenDetail, onOpen
       {visibleApplications.length === 0 ? (
         <div className="beta-applications-workspace-empty">
           <h3>{applications.length === 0 ? "Your next chapter starts with one role." : "No applications match these filters"}</h3>
-          <p>{applications.length === 0 ? "Open a saved role in Studio and choose Save draft record in Final review to start tracking it. Nothing is submitted automatically." : "Try another search phrase or reset the status filter."}</p>
+          <p>{applications.length === 0 ? "Save a role in Discover, open its Application Studio, then choose Save draft record in Final check. Nothing is submitted automatically." : "Try another search phrase or reset the status filter."}</p>
+          {applications.length === 0 && onFindRoles && <button type="button" className="beta-applications-workspace-primary" onClick={onFindRoles}>Find roles in Discover</button>}
           {applications.length > 0 && <button type="button" onClick={() => { setQuery(""); setStatusFilter("all"); }}>Reset filters</button>}
         </div>
       ) : (
@@ -103,7 +105,7 @@ export function ApplicationsWorkspace({ jobs, applications, onOpenDetail, onOpen
               </div>
               <div className="beta-applications-workspace-actions">
                 <button type="button" disabled={!job} className="beta-applications-workspace-secondary" onClick={() => job && onOpenDetail(job)}>View role</button>
-                <button type="button" disabled={!job} className="beta-applications-workspace-primary" onClick={() => job && onOpenStudio(job)}>Open studio</button>
+                <button type="button" disabled={!job} className="beta-applications-workspace-primary" onClick={() => job && onOpenStudio(job)}>Application Studio</button>
               </div>
             </article>;
           })}
