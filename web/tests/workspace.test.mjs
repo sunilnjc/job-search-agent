@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { activeRoles, applicationCounts, groupRoles, safePostingUrl, WORKSPACE_TABS } from "../src/beta/workspace.ts";
+import { activeRoles, applicationCounts, groupRoles, safePostingUrl, WORKSPACE_TAB_LABELS, WORKSPACE_TABS } from "../src/beta/workspace.ts";
 
 const job = (id, status = "new", eligibility_status = "unknown") => ({ id, status, eligibility_status });
 
 test("web navigation matches the iPhone workspace", () => {
   assert.deepEqual(WORKSPACE_TABS, ["today", "discover", "studio", "tracker"]);
+  assert.equal(WORKSPACE_TAB_LABELS.studio, "Documents");
 });
 
 test("review and ready groups never duplicate a role", () => {

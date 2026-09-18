@@ -89,7 +89,13 @@ export function BillingPanel({ userId, onBack, onPrivacy }: { userId: string; on
           <div><dt>Period start</dt><dd>{dateLabel(subscription.period_start)}</dd></div><div><dt>Paid through{live ? "" : " (test record)"}</dt><dd>{dateLabel(subscription.paid_through)}</dd></div>
           <div><dt>Cancellation at period end</dt><dd>{subscription.cancel_at_period_end === null ? "Not supplied" : subscription.cancel_at_period_end ? "Scheduled" : "Not scheduled"}</dd></div><div><dt>Cancellation status</dt><dd>{subscription.cancellation_status || "Not supplied"}</dd></div>
         </dl>}
-        {status?.reconciliation_pending && <p className="beta-notice">Billing verification is pending. Use Verify payment & access to retry; do not assume your subscription changed.</p>}
+        {status?.reconciliation_pending && (
+          <p className="beta-notice">
+            {status.access.allowed
+              ? "Workspace access is already active. Subscription details may still be updating — use Verify payment & access if something looks out of date."
+              : "Billing verification is still pending. Use Verify payment & access after checkout; do not assume your subscription changed from the return URL alone."}
+          </p>
+        )}
       </section>
       <section className="workflow-card"><h2>{live ? "Available plans" : "Available sandbox plans"}</h2><p>{live ? "Prices below come from the configured Stripe catalog. Confirm the final recurring amount in checkout." : "Prices are verified against the configured Stripe test catalog. Do not enter real payment details."}</p>
         <label htmlFor="billing-plan">Choose a plan</label><select id="billing-plan" value={plan} disabled={busy || !actions.checkout || uncertain || !!link} onChange={event => { setPlan(event.target.value); setLink(null); }}><option value="">Choose a plan</option>{plans.map(p => <option key={p.plan_key} value={p.plan_key}>{p.display_name} — {billingPriceLabel(p)}</option>)}</select>

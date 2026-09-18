@@ -11,12 +11,15 @@ const root = dirname(fileURLToPath(import.meta.url));
 test("structured fit explanation wins and legacy rationale still splits", () => {
   const structured = coerceFitExplanation({
     rationale: "Fit estimate, not an ATS score.\nConfirmed information: Built reports [career_text.0]",
-    fit_explanation: { why: ["Overlap on confirmed clinic work."], evidence: ["Confirmed information: Built reports."], uncertainty: ["Eligibility unknown."] },
+    fit_explanation: { why: ["Overlap on confirmed clinic work."], evidence: ["Confirmed information: Built reports [career_text.0]"], uncertainty: ["Eligibility unknown."] },
   });
   assert.deepEqual(structured.why, ["Overlap on confirmed clinic work."]);
+  assert.equal(structured.evidence[0], "Confirmed information: Built reports");
   assert.equal(structured.uncertainty[0], "Eligibility unknown.");
   const fallback = fitExplanationFromRationale("Fit estimate, not an ATS score.\nConfirmed information: Built reports [career_text.0]\nThe numeric fit estimate is unvalidated.");
   assert.ok(fallback.why.length && fallback.evidence.length && fallback.uncertainty.length);
+  assert.equal(fallback.evidence[0], "Confirmed information: Built reports");
+  assert.doesNotMatch(fallback.evidence.join(" "), /career_text/);
 });
 
 test("trust route is recognized and unpublished by default", () => {

@@ -7,10 +7,15 @@ server-built rationale. Old clients keep `rationale`. New clients may read
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 _MAX_ITEMS = 16
 _MAX_CHARS = 2000
+_SOURCE_CITATION = re.compile(
+    r"\s*\[(?:[a-z][\w]*(?:\.[a-z\d_]+)*)(?:,\s*(?:[a-z][\w]*(?:\.[a-z\d_]+)*))*\]",
+    re.I,
+)
 _EVIDENCE_PREFIXES = (
     "Job posting:",
     "Confirmed information:",
@@ -39,7 +44,7 @@ _UNCERTAINTY_MARKERS = (
 def _clean_line(value: Any) -> Optional[str]:
     if not isinstance(value, str):
         return None
-    text = " ".join(value.split()).strip()
+    text = " ".join(_SOURCE_CITATION.sub("", value).split()).strip()
     if not text or len(text) > _MAX_CHARS:
         return text[:_MAX_CHARS] if text else None
     return text

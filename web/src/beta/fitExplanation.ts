@@ -8,12 +8,20 @@ const UNCERTAINTY_MARKERS = [
   "requirement comparison was discarded", "hard constraint",
 ];
 
+/** Drop internal source ids like [career_text.0] from user-visible fit copy. */
+export function stripSourceCitations(text: string): string {
+  return text
+    .replace(/\s*\[(?:[a-z][\w]*(?:\.[a-z\d_]+)*)(?:,\s*(?:[a-z][\w]*(?:\.[a-z\d_]+)*))*\]/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function cleanLines(values: unknown, limit = 16): string[] {
   if (!Array.isArray(values)) return [];
   const items: string[] = [];
   for (const value of values.slice(0, limit)) {
     if (typeof value !== "string") continue;
-    const text = value.replace(/\s+/g, " ").trim().slice(0, 2000);
+    const text = stripSourceCitations(value.replace(/\s+/g, " ").trim()).slice(0, 2000);
     if (text && !items.includes(text)) items.push(text);
   }
   return items;
@@ -30,13 +38,13 @@ export function fitExplanationFromRationale(rationale: string | null | undefined
   const evidence: string[] = [];
   const uncertainty: string[] = [];
   for (const raw of (rationale || "").split("\n")) {
-    const text = raw.replace(/\s+/g, " ").trim();
+    const text = stripSourceCitations(raw.replace(/\s+/g, " ").trim());
     if (!text) continue;
     if (EVIDENCE_PREFIXES.some((prefix) => text.startsWith(prefix))) evidence.push(text);
     else if (UNCERTAINTY_MARKERS.some((marker) => text.toLowerCase().includes(marker))) uncertainty.push(text);
     else why.push(text);
   }
-  return { why, evidence, uncertainty };
+  return { why: cleanLines(why, 12), evidence: cleanLines(evidence, 16), uncertainty: cleanLines(uncertainty, 16) };
 }
 
 export function coerceFitExplanation(job: { rationale?: string | null; fit_explanation?: FitExplanation | null }): FitExplanation {

@@ -7,7 +7,7 @@ import type { BetaJob } from "./types";
 export function assessmentDisplay(job: Pick<BetaJob, "score" | "rationale">): string {
   const reason = job.rationale || "";
   if (/numeric fit estimate is unvalidated|requirement comparison was discarded/i.test(reason)) {
-    return "Assessment needs review. The requirement comparison could not be validated; no reliable match score is available. Review the posting and follow-up questions before retrying.";
+    return "AI comparison could not be validated, so no match score is shown. Review the posting and any follow-up questions, then assess again.";
   }
   if (job.score == null || !Number.isFinite(job.score) || job.score < 0 || job.score > 10) {
     return "No current AI assessment.";

@@ -6,7 +6,7 @@ test("rejected legacy rubric never promotes its saved number", () => {
   for (const rationale of ["The numeric fit estimate is unvalidated, not a pass on any requirement.",
     "The model requirement comparison was discarded because it could not be validated."]) {
     const result = assessmentDisplay({score: 9, rationale});
-    assert.match(result, /Assessment needs review/);
+    assert.match(result, /could not be validated|no match score/i);
     assert.doesNotMatch(result, /9\/10/);
   }
 });
