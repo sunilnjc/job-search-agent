@@ -264,13 +264,23 @@ def _without_contact(text: str, names: tuple[str, ...] = ()) -> str:
     """Remove contact identifiers from free resume text before model requests.
 
     Phone matching needs at least nine digits, so years, date ranges and
-    percentages remain. Postal addresses are not reliably detectable here.
+    percentages remain. Bare digit runs (no separators) are stripped as well as
+    separated forms. Postal addresses are not reliably detectable here.
     """
     for name in names:
         text = re.sub(r"(?<!\w)" + re.escape(name) + r"(?!\w)", "[name removed]", text, flags=re.I)
     text = _CONTACT_EMAIL.sub("[email removed]", text)
     text = _CONTACT_PROFILE.sub("[link removed]", text)
-    return _CONTACT_PHONE.sub(lambda m: "[phone removed]" if re.search(r"[\s().+-]", m.group()) else m.group(), text)
+    return _CONTACT_PHONE.sub("[phone removed]", text)
+
+
+def _profile_names(profile) -> tuple[str, ...]:
+    if not isinstance(profile, dict):
+        return ()
+    return tuple(clean_text(profile[key]) for key in ("display_name", "full_name", "name")
+                 if isinstance(profile.get(key), str) and len(clean_text(profile[key])) >= 3)
+
+
 _PREFERENCE_FIELDS = {"target_titles", "preferred_locations", "preferred_regions", "remote_preference",
                       "work_authorization_notes", "sponsorship_required"}
 _JOB_FIELDS = {"title", "company_name", "description", "location_text", "workplace_type", "employment_type"}
@@ -286,6 +296,15 @@ def _context(context: dict) -> tuple[dict, list[dict]]:
     if not isinstance(context, dict):
         raise StudioError("Supply a career context object.")
     facts: list[dict] = []
+    profile = context.get("profile") or {}
+    preferences = context.get("preferences") or {}
+    job = context.get("job") or {}
+    if not all(isinstance(item, dict) for item in (profile, preferences, job)):
+        raise StudioError("Profile, preferences and job must be objects.")
+    # Resolve display names before building facts so every outbound string can
+    # be minimized the same way career_text already was.
+    names = _profile_names(profile)
+
     def add(path, value, kind, depth=0):
         if depth > 6 or len(facts) >= 400:
             raise StudioError("Too many career details. Shorten the context and try again.")
@@ -305,13 +324,11 @@ def _context(context: dict) -> tuple[dict, list[dict]]:
             if isinstance(value, float) and not math.isfinite(value):
                 raise StudioError("Career details contain an invalid number.")
             text = clean_text(_input_text(str(value)))
+            # Minimize identifiers in every fact kind before the model payload.
+            # Document contact blocks still render from raw profile via _identity.
+            text = _without_contact(text, names)
             if text and not _INSTRUCTIONS.search(text):
                 facts.append({"id": path, "text": text, "kind": kind})
-    profile = context.get("profile") or {}
-    preferences = context.get("preferences") or {}
-    job = context.get("job") or {}
-    if not all(isinstance(item, dict) for item in (profile, preferences, job)):
-        raise StudioError("Profile, preferences and job must be objects.")
     try:
         background = background_from_context(context)
     except (ValidationError, TypeError, ValueError):
@@ -330,20 +347,24 @@ def _context(context: dict) -> tuple[dict, list[dict]]:
         add("career_background.experience_level", "Self-reported career stage: " + background.experience_level, "candidate")
     qualifications = []
     for index, qualification in enumerate(background.qualifications):
-        text = qualification_fact(qualification)
+        # Scrub contact before the URL gate so a phone/email in evidence_note
+        # does not drop the whole credential, and does not reach the model.
+        text = _without_contact(qualification_fact(qualification), names)
         if not _INSTRUCTIONS.search(text) and not _URL.search(text):
             add(f"career_background.qualifications.{index}", text, "candidate")
-            facts[-1]["qualification_name"] = clean_text(qualification.name)
-            qualifications.append({"source_id": f"career_background.qualifications.{index}", **qualification.model_dump()})
+            facts[-1]["qualification_name"] = _without_contact(clean_text(qualification.name), names)
+            dump = qualification.model_dump()
+            for field in ("name", "jurisdiction", "evidence_note"):
+                if isinstance(dump.get(field), str):
+                    dump[field] = _without_contact(dump[field], names)
+            qualifications.append({"source_id": f"career_background.qualifications.{index}", **dump})
     description = _input_text(job.get("description") or "")
     for index, segment in enumerate(job_segments(description)):
         add(f"job.requirements.{index}", segment, "job")
-    names = tuple(clean_text(profile[key]) for key in ("display_name", "full_name", "name")
-                  if isinstance(profile.get(key), str) and len(clean_text(profile[key])) >= 3)
     career = _input_text(context.get("career_text") or "")
     for index, line in enumerate(career.splitlines()):
         if line.strip():
-            add(f"career_text.{index}", _without_contact(line, names), "candidate")
+            add(f"career_text.{index}", line, "candidate")
     answers = context.get("answers") or []
     if not isinstance(answers, list) or len(answers) > 100:
         raise StudioError("Answers must be a list of at most 100 confirmed records.")
@@ -366,10 +387,12 @@ def _context(context: dict) -> tuple[dict, list[dict]]:
         # Include question with answer, so "No" cannot lose its question context.
         # Employment declarations are useful scoped context, not resume prose.
         kind = "employment_declaration" if _WORK_RIGHTS.search(answer["question"]) else "candidate"
-        add(f"answers.{index}", answer["question"] + " " + answer["answer"], kind)
+        question = _without_contact(answer["question"], names)
+        response = _without_contact(answer["answer"], names)
+        add(f"answers.{index}", question + " " + response, kind)
         if facts and facts[-1]["id"] == f"answers.{index}":
-            confirmed_answers.append({"source_id": f"answers.{index}", "question": answer["question"],
-                                      "answer": answer["answer"], "scope": scope})
+            confirmed_answers.append({"source_id": f"answers.{index}", "question": question,
+                                      "answer": response, "scope": scope})
     resume = _without_contact(_input_text(context.get("resume_text") or ""), names)
     payload = {"source_facts": facts, "unconfirmed_resume_text": resume,
                "career_background": {"profession": profession, "experience_level": background.experience_level,
@@ -860,11 +883,14 @@ def answer_chat(context: dict, message: str, mode: str, history: list) -> dict:
             "reply": "This declaration must be reviewed and completed by you. I cannot make or finalize it on your behalf.",
             "evidence": [], "questions": [],
         })
+    names = _profile_names(context.get("profile"))
     safe_history = []
     for item in history[-12:]:
         if isinstance(item, dict) and item.get("role") in {"user", "assistant"}:
-            safe_history.append({"role": item["role"], "content": _input_text(item.get("content", ""), maximum=6000)})
-    payload.update(operation="chat", mode=mode, message=message, untrusted_history=safe_history)
+            safe_history.append({"role": item["role"],
+                                 "content": _without_contact(_input_text(item.get("content", ""), maximum=6000), names)})
+    payload.update(operation="chat", mode=mode, message=_without_contact(message, names),
+                   untrusted_history=safe_history)
     output = _complete(payload, _ChatOutput)
     try:
         evidence = _validate_claims(output.claims, facts)

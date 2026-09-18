@@ -9,6 +9,7 @@ from datetime import date
 
 from jobagent.mobile.discovery_relevance import (
     METHOD, is_role_query, matches_titles, profile_evidence, relevance, title_level,
+    _requirements, _segments,
 )
 
 
@@ -279,6 +280,59 @@ class PostingSegmentationTests(unittest.TestCase):
             self.assertIn(signal, overlap)
         for noise in ("design", "reviews", "services"):
             self.assertNotIn(noise, overlap)
+
+
+class LaunchClosureRequirementsSegmentationTests(unittest.TestCase):
+    """Heading/list boundaries must survive lowercase bullets after a heading."""
+
+    def test_lowercase_bullets_after_requirements_heading_stay_separate(self):
+        description = "Requirements:\n- python\n- kafka"
+        self.assertEqual(list(_segments(description)), ["Requirements:", "python", "kafka"])
+        self.assertEqual(list(_requirements(description)),
+                         [("python", "required"), ("kafka", "required")])
+
+    def test_mixed_case_bullets_preferred_section_and_credentials(self):
+        description = (
+            "Requirements:\n"
+            "- Python experience\n"
+            "- Kafka streaming\n"
+            "Preferred:\n"
+            "- CPA preferred\n"
+            "- AWS certification is a bonus\n"
+            "1. current RN licence\n"
+        )
+        self.assertEqual(
+            list(_segments(description)),
+            ["Requirements:", "Python experience", "Kafka streaming",
+             "Preferred:", "CPA preferred", "AWS certification is a bonus",
+             "current RN licence"],
+        )
+        reqs = list(_requirements(description))
+        self.assertIn(("Python experience", "required"), reqs)
+        self.assertIn(("Kafka streaming", "required"), reqs)
+        optional = [clause for clause, importance in reqs if importance == "optional"]
+        self.assertTrue(any("CPA" in clause for clause in optional))
+        self.assertTrue(any("AWS" in clause or "certification" in clause.lower() for clause in optional))
+        self.assertTrue(any("RN" in clause for clause, _ in reqs))
+
+    def test_genuine_wrapped_lowercase_continuation_still_rejoins(self):
+        description = (
+            "Requirements:\n"
+            "Can think about how data will pass through your software\n"
+            "from persistent storage through to API endpoint\n"
+        )
+        segments = list(_segments(description))
+        self.assertEqual(
+            segments,
+            ["Requirements:",
+             "Can think about how data will pass through your software "
+             "from persistent storage through to API endpoint"],
+        )
+        self.assertEqual(
+            list(_requirements(description)),
+            [("Can think about how data will pass through your software "
+              "from persistent storage through to API endpoint", "required")],
+        )
 
 
 if __name__ == "__main__":

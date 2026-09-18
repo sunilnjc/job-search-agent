@@ -112,11 +112,13 @@ def select_public_boards(*, interests: frozenset[str], countries: frozenset[str]
         # A board tagged for many professions matches everything, so it must not
         # outrank a specialist purely by breadth. Without this, boards reviewed
         # first won every tie and a later catalog entry was never reachable.
-        # Breadth is only a tie-break: a board concentrated in a requested
-        # country stays ahead of a broader one, so asking for Germany still
-        # surfaces the German board first.
+        # Geographic concentration outranks tag-count: a board focused in a
+        # requested country stays ahead of a broader one, so asking for Germany
+        # still surfaces the German board first. On remaining ties, fewer
+        # profession tags win (specialist preference). The previous negative
+        # tag-count put generalists first, which contradicted this comment.
         focus = len(countries & set(locations)) / len(locations) if locations else 0
-        specificity = (-round(focus * 4), -min(len(tags), 8))
+        specificity = (-round(focus * 4), min(len(tags), 8))
         # Review order is the last resort only, so the catalog stays deterministic
         # (no rotation that makes results disappear on retry, no request data
         # retained) without letting the boards reviewed first win every tie.

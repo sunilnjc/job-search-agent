@@ -16,6 +16,14 @@ export function billingRouteRequested(search: string): boolean {
   const values = new URLSearchParams(search).getAll("billing");
   return values.length === 1 && ["plans", "return", "cancelled"].includes(values[0]);
 }
+/** Pure checkout-return location. Does not touch history; the caller may replaceState. */
+export function billingReturnLocation(search: string, pathname: string, hash = ""): { open: boolean; href: string } {
+  const open = billingRouteRequested(search);
+  const params = new URLSearchParams(search);
+  if (open) params.delete("billing");
+  const next = params.toString();
+  return { open, href: pathname + (next ? `?${next}` : "") + hash };
+}
 export type CustomerBillingStatus = BillingStatus & {
   account_exists: boolean; reconciliation_pending: boolean; mode_mismatch?: boolean;
   access: { allowed: boolean; grant_source: "manual" | "billing" | null;

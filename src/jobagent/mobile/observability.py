@@ -39,7 +39,7 @@ class WorkflowTelemetry:
             route = getattr(scope.get("route"), "path", "unmatched")
             if len(route) > 160:
                 route = "unmatched"
-            if route not in ("/healthz", "/readyz", "/api/mobile/health", "/api/mobile/version") or status >= 400:
+            if route not in ("/healthz", "/readyz", "/api/mobile/health", "/api/mobile/readyz", "/api/mobile/version") or status >= 400:
                 method = scope.get("method", "")
                 logger.log(logging.WARNING if status >= 400 else logging.INFO,
                            "workflow_request operation=%s method=%s status=%s duration_ms=%s request_id=%s",

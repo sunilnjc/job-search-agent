@@ -11,7 +11,6 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .app import create_app as create_api
-from .repository import SupabaseSettings
 
 
 def trust_page_enabled(environ=None) -> bool:
@@ -22,22 +21,17 @@ def trust_page_enabled(environ=None) -> bool:
 
 def create_web_app(dist=None, **api_options):
     root = Path(dist or os.environ.get("MOBILE_WEB_DIST", "/app/web/dist")).resolve()
-    application = create_api(**api_options)
+
+    def extra_ready():
+        if not (root / "index.html").is_file() or not (root / "assets").is_dir():
+            raise ValueError("Website build is unavailable.")
+
+    application = create_api(extra_ready=extra_ready, **api_options)
 
     @application.get("/healthz")
     async def health():
         # Liveness does not claim database/provider availability.
         return {"status": "ok", "service": "job-pursuit-web"}
-
-    @application.get("/readyz")
-    async def ready():
-        try:
-            (api_options.get("settings") or SupabaseSettings.from_env()).validate()
-            if not (root / "index.html").is_file() or not (root / "assets").is_dir():
-                raise ValueError()
-        except Exception:
-            return JSONResponse({"status": "not_ready"}, status_code=503)
-        return {"status": "ready", "scope": "configuration_and_static_build"}
 
     @application.get("/")
     async def home():

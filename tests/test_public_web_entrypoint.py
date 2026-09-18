@@ -42,9 +42,16 @@ class PublicWebTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/mobile/account").status_code, 401)
 
     def test_ready_requires_build_but_liveness_does_not(self):
-        self.assertEqual(self.client.get("/readyz").status_code, 200)
+        response = self.client.get("/readyz")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("content-type", "").split(";")[0], "application/json")
+        self.assertEqual(response.json(), {
+            "status": "ready", "service": "job-pursuit-mobile", "scope": "configuration_and_static_build",
+        })
+        self.assertEqual(self.client.get("/api/mobile/readyz").json(), response.json())
         (self.root / "index.html").unlink()
         self.assertEqual(self.client.get("/readyz").status_code, 503)
+        self.assertEqual(self.client.get("/readyz").json()["status"], "not_ready")
         self.assertEqual(self.client.get("/healthz").status_code, 200)
         self.assertEqual(self.client.get("/beta").status_code, 503)
 
