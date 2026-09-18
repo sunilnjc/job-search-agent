@@ -199,10 +199,9 @@ def no_overflow(page):
 
 def open_studio(page):
     page.goto(BASE)
-    expect(page.get_by_role("heading", name="Your next move, Alex.")).to_be_visible()
-    page.get_by_role("navigation", name="Primary navigation").get_by_role("button", name="Discover", exact=True).click()
-    page.get_by_role("button", name=re.compile(r"^Saved roles \(")).click()
-    page.get_by_role("button", name="Application studio", exact=True).click()
+    expect(page.get_by_role("heading", name="Roles for your next move.")).to_be_visible()
+    page.get_by_role("navigation", name="Primary navigation").get_by_role("button", name="Rank", exact=True).click()
+    page.get_by_role("button", name="Prepare", exact=True).first.click()
     expect(page.get_by_role("textbox", name="Full job description", exact=True)).to_have_value(JOB["description"])
 
 
@@ -298,7 +297,7 @@ def main():
                     page.screenshot(path=str(output / f"studio-{width}-{scheme}.png"))
                 page.keyboard.press("Escape")
                 expect(page.get_by_role("dialog")).to_have_count(0)
-                expect(page.get_by_role("button", name="Application studio", exact=True)).to_be_focused()
+                expect(page.get_by_role("button", name="Prepare", exact=True).first).to_be_focused()
                 assert not state["unexpected"], state["unexpected"]
                 context.close()
                 passed(f"mock visual/focus/consent {width}px {scheme}")

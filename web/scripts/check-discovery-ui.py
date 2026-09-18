@@ -131,7 +131,7 @@ def main():
             page.get_by_text("Saved preferences applied automatically", exact=True).click()
             expect(page.locator(".discovery-preferences")).to_contain_text(profession)
             expect(page.get_by_role("heading", name="Roles to explore", exact=True)).to_be_visible()
-            page.get_by_role("navigation", name="Primary navigation").get_by_role("button", name="Today", exact=True).click()
+            page.get_by_role("navigation", name="Primary navigation").get_by_role("button", name="Rank", exact=True).click()
             page.get_by_role("navigation", name="Primary navigation").get_by_role("button", name="Discover", exact=True).click()
             expect(page.get_by_role("heading", name="Roles to explore", exact=True)).to_be_visible()
             assert len(state["searches"]) == 1, "Returning to Discover reuses the private five-minute snapshot"
@@ -273,7 +273,7 @@ def main():
             expect(page.get_by_role("region", name="Discovery coverage and geography warnings")).to_contain_text("Strict saved location/sponsorship rules excluded 3")
             expect(page.get_by_text("No suitable roles were found within these sources and your constraints. We have not changed your location or work preferences.", exact=True)).to_be_visible()
             expect(page.get_by_role("button", name="Save role", exact=True)).to_have_count(0)
-            page.get_by_role("navigation", name="Primary navigation").get_by_role("button", name="Today", exact=True).click()
+            page.get_by_role("navigation", name="Primary navigation").get_by_role("button", name="Rank", exact=True).click()
             page.get_by_role("navigation", name="Primary navigation").get_by_role("button", name="Discover", exact=True).click()
             expect(page.get_by_role("heading", name="No matching roles in the fetched sample", exact=True)).to_be_visible()
             assert len(state["searches"]) == 2, "Unchanged strict empty results must not cause a retry loop"

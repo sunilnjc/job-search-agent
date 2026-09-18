@@ -1,14 +1,14 @@
-import type { BetaApplication, BetaJob } from "./types.ts";
+import type { BetaApplication, BetaJob } from "./types";
 
-export const WORKSPACE_TABS = ["today", "discover", "studio", "tracker"] as const;
+/** Core loop nav: Discover → Rank → Prepare → Review (focus-plan wedge). */
+export const WORKSPACE_TABS = ["discover", "rank", "prepare", "review"] as const;
 export type WorkspaceTab = typeof WORKSPACE_TABS[number];
 
-/** User-facing nav labels. Tab id `studio` is the Documents library; Application Studio is the per-role modal. */
 export const WORKSPACE_TAB_LABELS: Record<WorkspaceTab, string> = {
-  today: "Today",
   discover: "Discover",
-  studio: "Documents",
-  tracker: "Tracker",
+  rank: "Rank",
+  prepare: "Prepare",
+  review: "Review",
 };
 
 export function activeRoles(jobs: BetaJob[]) {

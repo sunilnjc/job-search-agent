@@ -126,7 +126,7 @@ def main():
             clean(state, base, prepares=1)
             # Leaving/reopening Studio must not retain proof or acknowledgement.
             page.get_by_role("button", name="Close", exact=True).click()
-            page.get_by_role("button", name="Application studio", exact=True).click()
+            page.get_by_role("button", name="Prepare", exact=True).click()
             page.get_by_role("button", name="Documents", exact=True).click()
             page.get_by_role("checkbox", name="Enable AI assistance", exact=False).check()
             expect(page.get_by_role("button", name="Prepare draft documents", exact=True)).to_be_disabled()
@@ -135,7 +135,7 @@ def main():
             base["data"]["jobs"].append(state["job"])
             state["pending"].append({**OP, "id": NEW, "job_id": OTHER_JOB, "filename": "other-role-document.pdf"})
             page.get_by_role("button", name="Close", exact=True).click()
-            page.locator(".beta-job").filter(has_text="Another synthetic role").get_by_role("button", name="Application studio", exact=True).click()
+            page.locator(".beta-job").filter(has_text="Another synthetic role").get_by_role("button", name="Prepare", exact=True).click()
             page.get_by_role("button", name="Documents", exact=True).click()
             page.get_by_role("checkbox", name="Enable AI assistance", exact=False).check()
             expect(page.get_by_role("region", name="artifact recovery")).to_contain_text("other-role-document.pdf")
