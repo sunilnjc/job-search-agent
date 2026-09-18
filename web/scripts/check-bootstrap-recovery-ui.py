@@ -88,7 +88,7 @@ def run_case(browser, width, recovery):
         screenshots.append(name)
 
     def tracker_counts(stage, expected_ready):
-        page.get_by_role("navigation", name="Primary navigation").get_by_role("button", name="Tracker", exact=True).click()
+        page.get_by_role("navigation", name="Primary navigation").get_by_role("button", name="Review", exact=True).click()
         rows = page.locator(".beta-applications-workspace-row")
         expect(rows).to_have_count(2)
         expect(rows.locator(".beta-applications-workspace-status.ready")).to_have_count(expected_ready)
@@ -100,7 +100,7 @@ def run_case(browser, width, recovery):
 
     try:
         page.goto(fixture.BASE)
-        expect(page.get_by_role("heading", name="Your next move, Alex.")).to_be_visible()
+        expect(page.get_by_role("heading", name="Roles for your next move.")).to_be_visible()
         warning = page.get_by_role("alert").filter(has_text="Readiness could not be verified for 1 saved role.")
         expect(warning).to_be_visible()
         expect(warning).to_contain_text("These roles are not marked Ready.")
@@ -140,7 +140,7 @@ def run_case(browser, width, recovery):
         tracker_counts("recovered", expected_ready)
         screenshot("recovered")
         page.reload()
-        expect(page.get_by_role("heading", name="Your next move, Alex.")).to_be_visible()
+        expect(page.get_by_role("heading", name="Roles for your next move.")).to_be_visible()
         expect(warning).to_have_count(0)
         tracker_counts("recovered-after-reload", expected_ready)
         assert len(bootstrap_reads) == 4

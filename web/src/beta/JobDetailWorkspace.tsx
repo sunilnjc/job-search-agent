@@ -3,29 +3,13 @@ import { safePostingUrl } from "./workspace";
 import { WorkspaceDialog } from "./WorkspaceDialog";
 import { assessmentDisplay } from "./assessmentDisplay";
 import { FitExplanationBlock } from "./FitExplanationBlock";
+import { eligibilityLabel, eligibilityNextAction } from "./eligibilityDisplay";
 
 export type JobDetailWorkspaceProps = {
   job: BetaJob;
   onClose: () => void;
   onOpenStudio: (job: BetaJob) => void;
 };
-
-function labelForEligibility(status: BetaJob["eligibility_status"]) {
-  const labels: Record<BetaJob["eligibility_status"], string> = {
-    eligible: "Work rights recorded",
-    ineligible: "Not currently eligible",
-    needs_review: "Work rights need your review",
-    unknown: "Work rights not recorded yet",
-  };
-  return labels[status];
-}
-
-function eligibilityNextStep(status: BetaJob["eligibility_status"]) {
-  if (status === "eligible") return "Your work-rights self-report is saved for this role. Re-check it if the posting or your situation changes.";
-  if (status === "ineligible") return "You recorded that you are not eligible for this role. Update that self-report in Application Studio if it changes.";
-  if (status === "needs_review") return "Open Application Studio and answer the work-rights question for this posting.";
-  return "Open Application Studio to record whether you can work in this location. AI cannot confirm work rights.";
-}
 
 function labelForWorkplace(workplace: BetaJob["workplace_type"]) {
   if (!workplace || workplace === "unknown") return "Workplace not listed";
@@ -72,7 +56,7 @@ export function JobDetailWorkspace({ job, onClose, onOpenStudio }: JobDetailWork
         <div className="beta-job-detail-badges" aria-label="Role status">
           <span className="beta-job-detail-badge beta-job-detail-badge-source">Source: {job.source === "manual" ? "Saved posting — see original source" : job.source}</span>
           <span className={`beta-job-detail-badge beta-job-detail-badge-eligibility ${job.eligibility_status}`}>
-            {labelForEligibility(job.eligibility_status)}
+            {eligibilityLabel(job.eligibility_status)}
           </span>
           <span className={`beta-job-detail-badge beta-job-detail-badge-freshness ${hasLiveValidation ? "validated" : "pending"}`}>
             {hasLiveValidation ? `Last recorded validation ${validatedDate}` : "Posting freshness not verified"}
@@ -101,8 +85,8 @@ export function JobDetailWorkspace({ job, onClose, onOpenStudio }: JobDetailWork
               <p className="beta-job-detail-kicker">02</p>
               <h3 id={`job-detail-match-${job.id}`}>Match &amp; work rights</h3>
             </div>
-            <p className="beta-job-detail-status-copy">{labelForEligibility(job.eligibility_status)}</p>
-            <p className="beta-job-detail-muted">{eligibilityNextStep(job.eligibility_status)}</p>
+            <p className="beta-job-detail-status-copy">{eligibilityLabel(job.eligibility_status)}</p>
+            <p className="beta-job-detail-muted">{eligibilityNextAction(job.eligibility_status)}</p>
             <p className="beta-job-detail-status-copy" style={{ marginTop: 14 }}>AI role fit</p>
             <p className="beta-job-detail-muted">
               {job.score != null ? assessmentDisplay(job) : "Open Application Studio to compare this role with your selected resume and confirmed career facts."} This is not an ATS score, hiring probability, or work-rights verification.

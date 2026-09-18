@@ -5,9 +5,10 @@ import { activeRoles, applicationCounts, groupRoles, safePostingUrl, WORKSPACE_T
 
 const job = (id, status = "new", eligibility_status = "unknown") => ({ id, status, eligibility_status });
 
-test("web navigation matches the iPhone workspace", () => {
-  assert.deepEqual(WORKSPACE_TABS, ["today", "discover", "studio", "tracker"]);
-  assert.equal(WORKSPACE_TAB_LABELS.studio, "Documents");
+test("web navigation matches Discover → Rank → Prepare → Review", () => {
+  assert.deepEqual(WORKSPACE_TABS, ["discover", "rank", "prepare", "review"]);
+  assert.equal(WORKSPACE_TAB_LABELS.prepare, "Prepare");
+  assert.equal(WORKSPACE_TAB_LABELS.review, "Review");
 });
 
 test("review and ready groups never duplicate a role", () => {

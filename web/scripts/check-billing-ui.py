@@ -68,7 +68,8 @@ def open_billing(page, unpaid=False):
     page.goto(fixture.BASE + "?checkout=success&paid=true")
     if not unpaid:
         page.get_by_role("button", name="Your profile", exact=True).click()
-    page.get_by_role("button", name=re.compile(r"^(Billing test mode|Plans & access)$")).click()
+    page.locator("details.pursuit-note").filter(has_text="Operator tools").locator("summary").click()
+    page.get_by_role("button", name=re.compile(r"^(Billing test mode|Plans & access|Open dormant billing panel)$")).click()
     expect(page.get_by_role("heading", name="Choose your job-search plan", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Refresh billing", exact=True)).to_be_enabled()
 

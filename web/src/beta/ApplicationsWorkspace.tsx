@@ -10,7 +10,7 @@ export type ApplicationsWorkspaceProps = {
   onFindRoles?: () => void;
 };
 
-type StatusFilter = "all" | "draft" | "submitted" | "interviewing" | "closed";
+type StatusFilter = "all" | "draft" | "submitted" | "closed";
 
 const statusLabel: Record<BetaApplication["status"], string> = {
   draft: "Preparing", ready: "Ready", submitted: "Submitted", interviewing: "Interviewing",
@@ -18,10 +18,10 @@ const statusLabel: Record<BetaApplication["status"], string> = {
 };
 
 const eligibilityLabel: Record<BetaJob["eligibility_status"], string> = {
-  eligible: "Eligible",
-  ineligible: "Not eligible",
-  needs_review: "Needs review",
-  unknown: "Not checked",
+  eligible: "Work rights recorded",
+  ineligible: "Not currently eligible",
+  needs_review: "Needs work-rights review",
+  unknown: "Work rights not recorded",
 };
 
 function workplaceLabel(workplace: BetaJob["workplace_type"]) {
@@ -56,16 +56,16 @@ export function ApplicationsWorkspace({ jobs, applications, onOpenDetail, onOpen
       <style>{applicationsWorkspaceStyles}</style>
       <header className="beta-applications-workspace-header">
         <div>
-          <p className="beta-applications-workspace-eyebrow">TRACKER</p>
-          <h2 id="applications-workspace-title">Every application, in one place.</h2>
-          <p>Follow your progress from preparation to interview. Statuses reflect your saved application records.</p>
+          <p className="beta-applications-workspace-eyebrow">REVIEW</p>
+          <h2 id="applications-workspace-title">Packets ready for you to apply.</h2>
+          <p>Review prepared drafts and your saved status notes. You open the employer site and submit yourself — this product never auto-applies.</p>
         </div>
       </header>
 
       <div className="beta-applications-workspace-summary" aria-label="Application summary">
         <article><strong>{counts.draft}</strong><span>Preparing</span></article>
-        <article><strong>{counts.submitted}</strong><span>Submitted</span></article>
-        <article><strong>{counts.interviewing}</strong><span>Interviewing</span></article>
+        <article><strong>{counts.submitted}</strong><span>You marked submitted</span></article>
+        <article><strong>{counts.active}</strong><span>Active records</span></article>
       </div>
 
       <div className="beta-applications-workspace-controls">
@@ -74,7 +74,7 @@ export function ApplicationsWorkspace({ jobs, applications, onOpenDetail, onOpen
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search roles, companies, locations" type="search" />
         </label>
         <div className="beta-applications-workspace-filters" role="group" aria-label="Filter by application status">
-          {(["all", "draft", "submitted", "interviewing", "closed"] as StatusFilter[]).map((filter) => (
+          {(["all", "draft", "submitted", "closed"] as StatusFilter[]).map((filter) => (
             <button key={filter} type="button" aria-pressed={statusFilter === filter} className={statusFilter === filter ? "is-active" : ""} onClick={() => setStatusFilter(filter)}>
               {filter === "all" ? `All ${applications.length}` : filter === "closed" ? "Closed" : statusLabel[filter]}
             </button>
@@ -85,7 +85,7 @@ export function ApplicationsWorkspace({ jobs, applications, onOpenDetail, onOpen
       {visibleApplications.length === 0 ? (
         <div className="beta-applications-workspace-empty">
           <h3>{applications.length === 0 ? "Your next chapter starts with one role." : "No applications match these filters"}</h3>
-          <p>{applications.length === 0 ? "Save a role in Discover, open its Application Studio, then choose Save draft record in Final check. Nothing is submitted automatically." : "Try another search phrase or reset the status filter."}</p>
+          <p>{applications.length === 0 ? "Save a role in Discover, record work rights in Rank, prepare drafts in Prepare, then save a draft record in Final check. Nothing is submitted automatically." : "Try another search phrase or reset the status filter."}</p>
           {applications.length === 0 && onFindRoles && <button type="button" className="beta-applications-workspace-primary" onClick={onFindRoles}>Find roles in Discover</button>}
           {applications.length > 0 && <button type="button" onClick={() => { setQuery(""); setStatusFilter("all"); }}>Reset filters</button>}
         </div>
