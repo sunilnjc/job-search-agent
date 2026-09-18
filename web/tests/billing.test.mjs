@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { billingActions, billingCheckoutPayload, checkedBillingStatus, checkedBillingUrl, checkedCustomerBillingStatus, checkedBillingPlans, billingPriceLabel, billingRouteRequested } from "../src/beta/billing.ts";
+import { billingActions, billingCheckoutPayload, checkedBillingStatus, checkedBillingUrl, checkedCustomerBillingStatus, checkedBillingPlans, billingPriceLabel, billingRouteRequested, billingReturnLocation } from "../src/beta/billing.ts";
 import { createMobileTransport } from "../src/beta/mobileTransport.ts";
 
 const ready = { provider: "stripe", mode: "test", checkout_enabled: true, portal_enabled: true, configuration_ready: true, plan_keys: ["operator_test"], subscription: null, subscription_status: "none" };
@@ -9,6 +9,16 @@ const plan = {plan_key:"operator_test", display_name:"Sandbox Career", amount_mi
 test("billing return intents select a view only, reject ambiguous or forged paid hints", () => {
   for (const value of ["plans","return","cancelled"]) assert.equal(billingRouteRequested("?billing="+value),true);
   for (const search of ["?paid=true","?checkout=success","?billing=active","?billing=return&billing=plans"]) assert.equal(billingRouteRequested(search),false);
+});
+test("billing return location is pure and keeps other params; history is the caller's job", () => {
+  const first = billingReturnLocation("?billing=return&from=stripe", "/beta", "#ok");
+  const second = billingReturnLocation("?billing=return&from=stripe", "/beta", "#ok");
+  assert.deepEqual(first, second);
+  assert.equal(first.open, true);
+  assert.equal(first.href, "/beta?from=stripe#ok");
+  assert.equal(billingReturnLocation("?billing=return", "/beta").href, "/beta");
+  assert.deepEqual(billingReturnLocation("?paid=true", "/beta"), { open: false, href: "/beta?paid=true" });
+  assert.equal(billingReturnLocation("", "/beta").open, false);
 });
 test("customer access requires actual owner-bound quota state, not an active subscription string", () => {
   assert.deepEqual(checkedCustomerBillingStatus(account), account);

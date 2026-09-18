@@ -543,7 +543,7 @@ async def file_response(repo: MobileRepository, table: str, bucket: str, item_id
     return Response(content, media_type=mime, headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(filename, safe="")})
 
 
-def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Optional[httpx.AsyncBaseTransport] = None, studio: Any = None, requests_per_hour: int = 120, ai_per_hour: int = 20, uploads_per_hour: int = 20, max_workers: int = 4, discovery: Any = None, billing: Any = None) -> FastAPI:
+def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Optional[httpx.AsyncBaseTransport] = None, studio: Any = None, requests_per_hour: int = 120, ai_per_hour: int = 20, uploads_per_hour: int = 20, max_workers: int = 4, discovery: Any = None, billing: Any = None, extra_ready=None) -> FastAPI:
     from jobagent.privacy_logging import install_privacy_logging
     install_privacy_logging()
 
@@ -624,6 +624,24 @@ def create_app(*, settings: Optional[SupabaseSettings] = None, transport: Option
     @application.get("/api/mobile/health")
     async def health() -> dict:
         return {"status": "ok", "service": "job-pursuit-mobile"}
+
+    async def readyz():
+        """Public probe. Root /readyz must be routed here, not to the SPA host.
+
+        `/api/mobile/readyz` is the same JSON on the already-routed API prefix.
+        extra_ready lets the combined web process also require a static build.
+        """
+        scope = "configuration_and_static_build" if extra_ready is not None else "configuration"
+        try:
+            (settings or SupabaseSettings.from_env()).validate()
+            if extra_ready is not None:
+                extra_ready()
+        except Exception:
+            return JSONResponse({"status": "not_ready", "service": "job-pursuit-mobile", "scope": scope}, status_code=503)
+        return {"status": "ready", "service": "job-pursuit-mobile", "scope": scope}
+
+    application.add_api_route("/readyz", readyz, methods=["GET"])
+    application.add_api_route("/api/mobile/readyz", readyz, methods=["GET"])
 
     @application.get("/api/mobile/version")
     async def version() -> dict:

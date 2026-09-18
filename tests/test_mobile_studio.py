@@ -518,5 +518,109 @@ class MigrationTests(unittest.TestCase):
         self.assertNotIn("grant update (user_id", lowered)
 
 
+class LaunchClosureContactMinimizationTests(OfflineCase):
+    """AI payloads must not receive bare phones or structured-field emails.
+
+    Document contact blocks still come from profile fields via _identity and
+    must keep the original values for authorized rendering. This is minimization
+    of the model-processing path, not anonymization or end-to-end encryption.
+    """
+
+    def test_without_contact_strips_bare_phones_and_keeps_metrics(self):
+        self.assertEqual(studio._without_contact("Phone 971501234567"), "Phone [phone removed]")
+        self.assertEqual(studio._without_contact("971501234567"), "[phone removed]")
+        self.assertEqual(studio._without_contact("Call +971 50 123 4567 today"),
+                         "Call [phone removed] today")
+        kept = studio._without_contact("Improved conversion 40% during 2019-2021 and 2021-2025.")
+        self.assertEqual(kept, "Improved conversion 40% during 2019-2021 and 2021-2025.")
+
+    def test_handoff_summary_email_and_phone_leave_the_model_payload(self):
+        context = sample_context()
+        context["profile"] = dict(
+            context["profile"],
+            display_name="Synthetic Tester",
+            summary=("Contact Synthetic Tester at synthetic@example.invalid "
+                     "or +971 50 123 4567"),
+        )
+        payload, facts = studio._context(context)
+        sent = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("synthetic@example.invalid", sent)
+        self.assertNotIn("971 50 123 4567", sent)
+        summary = next(f["text"] for f in facts if f["id"] == "profile.summary")
+        self.assertIn("[email removed]", summary)
+        self.assertIn("[phone removed]", summary)
+        self.assertNotIn("synthetic@example.invalid", summary)
+
+    def test_context_filters_structured_fields_answers_chat_and_resume(self):
+        context = sample_context()
+        context["profile"] = dict(
+            context["profile"],
+            summary=("Reach me at alex@example.org or Phone 971501234567. "
+                     "Improved conversion 40% during 2019-2021."),
+            phone="971501234567",
+        )
+        context["preferences"] = dict(context["preferences"],
+                                      work_authorization_notes="Email hr@company.com for forms")
+        context["career_text"] = ("Phone 971501234567\n"
+                                  "Built systems with 40% improvement 2019-2021\n"
+                                  "alex@example.org")
+        context["answers"] = [{
+            "question": "Best contact?",
+            "answer": "alex@example.org / 971501234567",
+            "confirmed": True,
+            "scope": "profile",
+        }]
+        context["resume_text"] = "Call 971501234567 or alex@example.org"
+        context["career_background"] = {
+            "profession": "Engineer",
+            "experience_level": "senior",
+            "qualifications": [{
+                "name": "CPA",
+                "kind": "licence",
+                "status": "current",
+                "jurisdiction": "UAE",
+                "evidence_note": "Renewal desk Phone 971509998877",
+            }],
+        }
+        payload, facts = studio._context(context)
+        sent = json.dumps(payload, ensure_ascii=False)
+        for identifier in ("alex@example.org", "971501234567", "hr@company.com", "971509998877"):
+            self.assertNotIn(identifier, sent)
+        self.assertTrue(any(f["id"].startswith("career_background.qualifications.") for f in facts))
+        for kept in ("40%", "2019-2021", "Built systems with 40% improvement 2019-2021"):
+            self.assertIn(kept, sent)
+        self.assertIn("[phone removed]", sent)
+        self.assertIn("[email removed]", sent)
+        self.assertFalse(any(f["id"].startswith("profile.email") or f["id"].startswith("profile.phone")
+                             for f in facts))
+        provider = self.use_provider(chat_output())
+        studio.answer_chat(context, "Email me at alex@example.org", "general",
+                           [{"role": "user", "content": "My number is 971501234567"}])
+        chat_sent = json.dumps(provider.calls[0]["payload"], ensure_ascii=False)
+        for identifier in ("alex@example.org", "971501234567"):
+            self.assertNotIn(identifier, chat_sent)
+
+    def test_document_identity_keeps_original_contact_blocks(self):
+        context = sample_context()
+        context["profile"] = dict(
+            context["profile"],
+            email="alex@example.org",
+            phone="971501234567",
+            linkedin="https://linkedin.com/in/alex-example",
+        )
+        blocks = studio._identity(context)
+        rendered = " | ".join(block.text for block in blocks)
+        self.assertIn("Alex Example", rendered)
+        self.assertIn("alex@example.org", rendered)
+        self.assertIn("971501234567", rendered)
+        self.assertIn("linkedin.com/in/alex-example", rendered)
+
+    def test_postal_addresses_remain_an_explicit_residual_risk(self):
+        # Not claimed as anonymized. Street/postal forms are not stripped yet.
+        text = studio._without_contact("Lives at 12 Baker Street, London NW1 6XE")
+        self.assertIn("Baker Street", text)
+        self.assertIn("NW1 6XE", text)
+
+
 if __name__ == "__main__":
     unittest.main()

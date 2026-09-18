@@ -112,6 +112,23 @@ class CatalogSelectionTests(unittest.TestCase):
                                       countries=frozenset({"DE"}))
         self.assertIn(("greenhouse", "n26"), german[:3])
 
+    def test_specialist_boards_outrank_generalists_on_profession_and_geo_ties(self):
+        """Tie-break: fewer profession tags win. Negative tag-count used to invert this."""
+        fixture = (
+            ("greenhouse", "generalist",
+             ("software", "product", "data", "design", "commercial", "legal", "operations"), ("US",)),
+            ("greenhouse", "specialist", ("software",), ("US",)),
+            ("greenhouse", "other-geo", ("software",), ("DE",)),
+        )
+        with patch.object(d, "REVIEWED_PUBLIC_CATALOG", fixture):
+            from jobagent.mobile import discovery_catalog as catalog
+            with patch.object(catalog, "REVIEWED_PUBLIC_CATALOG", fixture):
+                selected = select_public_boards(
+                    interests=frozenset({"software"}), countries=frozenset({"US"}), limit=2)
+        self.assertEqual(selected[0], ("greenhouse", "specialist"))
+        self.assertEqual(selected[1], ("greenhouse", "generalist"))
+        self.assertNotIn(("greenhouse", "other-geo"), selected)
+
     def test_malformed_catalog_cannot_enlarge_worker_cache(self):
         enlarged = tuple(("lever", f"synthetic-{i}", (), ()) for i in range(MAX_CATALOG_BOARDS + 1))
         with patch.object(d, "REVIEWED_PUBLIC_CATALOG", enlarged), self.assertRaises(d.DiscoveryError):

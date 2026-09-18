@@ -21,7 +21,7 @@ import { DiscoveryPanel } from "./DiscoveryPanel";
 import { discoveryContextKey } from "./discovery";
 import type { DiscoverySnapshot } from "./discovery";
 import { BillingPanel } from "./BillingPanel";
-import { billingRouteRequested } from "./billing";
+import { billingReturnLocation, billingRouteRequested } from "./billing";
 import { isTrustPath, trustPageEnabled } from "./trustPage";
 import { TrustPageUnpublished, TrustSafetyPage } from "./TrustSafetyPage";
 import "./beta.css";
@@ -90,14 +90,20 @@ function SignedInWorkspace({ session, initialPrivacy = false }: { session: Sessi
   const [view, setView] = useState<View>("today");
   const [privacyOpen, setPrivacyOpen] = useState(initialPrivacy);
   // A Checkout/portal return only reopens the billing view; the panel then asks
-  // the server for status. The query is a hint, never payment proof.
-  const [billingOpen, setBillingOpen] = useState(() => {
-    if (typeof window === "undefined" || !billingRouteRequested(window.location.search)) return false;
-    const url = new URL(window.location.href);
-    url.searchParams.delete("billing");
-    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
-    return true;
-  });
+  // the server for status. The query is a hint, never payment proof. Keep this
+  // initializer pure: StrictMode double-invokes it, and mutating history here
+  // can drop the return flag before state is committed.
+  const [billingOpen, setBillingOpen] = useState(() => (
+    typeof window !== "undefined" && billingRouteRequested(window.location.search)
+  ));
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const next = billingReturnLocation(window.location.search, window.location.pathname, window.location.hash);
+    const current = window.location.pathname + window.location.search + window.location.hash;
+    if (next.open && next.href !== current) {
+      window.history.replaceState(window.history.state, "", next.href);
+    }
+  }, []);
   const [profile, setProfile] = useState<BetaProfile | null>(null);
   const [preferences, setPreferences] = useState<JobPreferences | null>(null);
   const [jobs, setJobs] = useState<BetaJob[]>([]);

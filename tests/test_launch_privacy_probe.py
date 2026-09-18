@@ -106,7 +106,7 @@ class LaunchPrivacyProbeTests(OfflineCase):
                 elif hasattr(item, "path") and getattr(item, "methods", None):
                     yield item
         for route in flatten(self.app.routes):
-            if route.path in {"/api/mobile/health", "/api/mobile/version"}:
+            if route.path in {"/api/mobile/health", "/api/mobile/version", "/readyz", "/api/mobile/readyz"}:
                 continue
             path = route.path
             for name in ("job_id", "resume_id", "artifact_id", "question_id"):
