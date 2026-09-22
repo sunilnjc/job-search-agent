@@ -1,5 +1,12 @@
 # Job Search Agent
 
+## Live product and engineering overview
+
+**Product:** The Job Pursuit · **Live beta:** https://thejobpursuit.com · **Source:** this repository.
+
+The application collects employer listings, filters eligibility, ranks matches, prepares candidate-grounded documents and tracks application outcomes. Its Python/FastAPI and React interface connects ATS sources, embeddings and hosted language models. Submission assistance records confirmation evidence and pauses for unsupported or ambiguous steps. The live product is a beta; planned work below is separate from implemented capabilities.
+
+
 A private, mobile-friendly job-application assistant for finding fresh, eligible software-engineering opportunities; ranking them against a real candidate profile; preparing grounded application material; and safely assisting with submission.
 
 The goal is **a small, explainable shortlist of worthwhile roles**, not thousands of unfiltered listings.
