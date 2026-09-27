@@ -1,5 +1,58 @@
 # Job Pursuit — Week 1 status
 
+## Current verification — 27 September 2026
+
+**W1: PARTIAL. W2 not started.** This section supersedes the historical 18 September deployment/404 notes below. Freeze remains: no LinkedIn, auto-apply, iOS or live Stripe.
+
+### Deployment provenance
+
+- Fetched `origin/main`: `a7c9b42fa188632c6d099c37d9afc07f0b880a2d`.
+- Host checkout HEAD: `9de103105bcc84a12be6d9b83a10d5393ca002b6` (PR #13). It is one README-only commit behind fetched main; no application changes in that committed delta.
+- Host checkout contains pre-existing uncommitted web changes. Preserved without pull, build or restart.
+- Live index and referenced JS `index-BWYL5vBE.js` and CSS `index-u6_sTfTQ.css` are byte-identical to local `web/dist`. Bundle includes Discover/Rank/Prepare/Review; owner also reports these tabs. This is not a fresh signed-in browser observation.
+- API version returns only workflow contract `2026-09-15-core-flow-v2`, no Git SHA. Exact deployed backend HEAD and source-to-build provenance are **unproven**. Last-Modified and asset parity do not prove clean-commit deployment.
+
+### Actual read-only live checks
+
+| Request | Observed result |
+| --- | --- |
+| `/beta` | 200 HTML, Last-Modified `Fri, 18 Sep 2026 16:24:57 GMT` |
+| JS/CSS referenced by index | Match local build bytes |
+| `/api/mobile/health` | 200 JSON, status ok |
+| `/api/mobile/readyz` | 200 JSON, status ready, scope configuration |
+| `/api/mobile/version` | 200 JSON, workflow contract only |
+| `/api/mobile/bootstrap` unauthenticated | 401 JSON |
+
+Configuration readiness does not prove live database/AI access or a completed authenticated journey.
+
+### Golden invited-account smoke — BLOCKED, not passed
+
+Attempted browser discovery with the available computer-use tool. It returned no browsers because the Mac is locked and automatic unlock failed. Owner confirmed they are away from the laptop. No alternate authenticated session was fabricated and no auth protections were bypassed.
+
+Still unexecuted this session: Discover → Rank → Prepare → Review, live eligibility checks and magic-link success/expired-link recovery. No AI requests or employer submissions were made.
+
+### Current exit checklist
+
+- [ ] Exact deployed build/backend SHA recorded (checkout lag is README-only, live SHA unavailable).
+- [ ] Fresh signed-in observation of the four wedge tabs (bundle/owner evidence currently available).
+- [x] `/api/mobile/readyz` returns 200 JSON.
+- [ ] Invited synthetic-account full loop, packet review and opened downloads.
+- [ ] Work-rights uncertainty displayed honestly in Rank/Prepare.
+- [ ] Invited-account auth success and failure recovery verified.
+
+### Next actions
+
+1. Owner unlocks Mac and opens beta in an existing invited synthetic golden account. Do not modify the founder's real profile.
+2. Run the full loop, check persistence/eligibility, prepare one bounded test packet and inspect grounding/downloads. No employer submission.
+3. Establish exact deployed source/build identity without overwriting the dirty checkout.
+4. Only if W1 exit is green, begin W2 grounding merge-blocker and first 3–5 ICP invites. Obtain actual approved recipients; do not invent contacts or publish their private email addresses in Git.
+
+This status refresh uses an isolated documentation worktree. No production restart, deployment, database mutation, invitation or freeze-list expansion. Merging the documentation PR does not mark W1 complete.
+
+---
+
+## Historical baseline — 18 September (superseded above)
+
 **As of:** 2026-09-18 (re-probed from Cursor cloud clone)  
 **Authority:** `job-pursuit-weeks-1-4-scorecard.md` · `job-pursuit-focus-plan.md` §4–§5  
 **Source SHA on `main`:** `9de1031` (merge of PR #13 focus-plan wedge)

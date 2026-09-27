@@ -1,5 +1,13 @@
 # Job Pursuit — weeks 1–4 status scorecard
 
+## Update — 27 September 2026
+
+**W1 remains Partial; W2–W4 not started.** Live now serves the 18 September assets, byte-identical to the host build, and `/api/mobile/readyz` returns 200 JSON. Old pre-wedge/404 notes below are historical. Exact deployed SHA remains unproven; current checkout is one README-only commit behind fetched main and has pre-existing local UI edits. Browser smoke is blocked by the locked Mac; the owner confirmed they are away. No ICP invites were sent. See `job-pursuit-week1-status.md` for the current authoritative exit checklist and evidence.
+
+Do not start W2 until invited-account Discover → Rank → Prepare → Review, eligibility and auth recovery are verified and deployment provenance is resolved. Freeze unchanged: no LinkedIn, auto-apply, iOS or live Stripe.
+
+## Historical planning baseline (18 September)
+
 **As of:** 2026-09-18  
 **Authority:** `job-pursuit-focus-plan.md` §4–§9 · `job-pursuit-handoff-brief.md`  
 **Week 1 detail:** `job-pursuit-week1-status.md`  
