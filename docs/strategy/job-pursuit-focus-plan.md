@@ -55,3 +55,8 @@ Default signed-in destination after onboarding: **Discover**.
 - Rank + Prepare show eligibility before AI fit.
 - Frontend unit tests cover nav labels and eligibility helpers.
 - No expansion of freeze-list surfaces.
+
+## Tracking
+
+Week-by-week scorecard (derived slices of this §4–§9 bucket): `job-pursuit-weeks-1-4-scorecard.md`.  
+Week 1 live evidence: `job-pursuit-week1-status.md`.
