@@ -4,6 +4,7 @@ import { WorkspaceDialog } from "./WorkspaceDialog";
 import { assessmentDisplay } from "./assessmentDisplay";
 import { FitExplanationBlock } from "./FitExplanationBlock";
 import { eligibilityLabel, eligibilityNextAction } from "./eligibilityDisplay";
+import { SponsorshipEvidence } from "./SponsorshipEvidencePanel";
 
 export type JobDetailWorkspaceProps = {
   job: BetaJob;
@@ -64,6 +65,7 @@ export function JobDetailWorkspace({ job, onClose, onOpenStudio }: JobDetailWork
         </div>
 
         <div className="beta-job-detail-content">
+          <SponsorshipEvidence description={job.description ?? ""} sourceUrl={job.source_url} />
           <section className="beta-job-detail-section" aria-labelledby={`job-detail-overview-${job.id}`}>
             <div className="beta-job-detail-section-heading">
               <p className="beta-job-detail-kicker">01</p>

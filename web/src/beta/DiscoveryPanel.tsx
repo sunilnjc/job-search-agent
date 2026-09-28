@@ -5,6 +5,7 @@ import { MobileApiError } from "./mobileTransport";
 import { checkedDiscoveryResponse, discoveryContextKey, discoveryRequest, discoverySavePayload, reusableDiscovery } from "./discovery";
 import type { DiscoveryFilters, DiscoveryJob, DiscoveryResponse, DiscoverySnapshot } from "./discovery";
 import { safePostingUrl } from "./workspace";
+import { SponsorshipEvidence } from "./SponsorshipEvidencePanel";
 import "./studio-workflow.css";
 import "./discovery.css";
 
@@ -109,6 +110,7 @@ export function DiscoveryPanel({ userId, profile, snapshot, onSnapshot, onReview
           <div className="discovery-result-heading">{strength(job) && <span className={`discovery-chip discovery-strength discovery-strength-${strength(job)!.level}`}>{strength(job)!.label}</span>}<h3>{job.title}</h3><p>{job.company_name} · {job.location_text || "Location not supplied"}{job.workplace_type === "unknown" ? "" : ` · ${job.workplace_type}`}</p></div>
           {job.relevance && <div className="discovery-fit"><h4>Why this role appeared</h4><ul>{job.relevance.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>{shownGaps(job.relevance.gaps).length > 0 && <><h4>Gaps to review</h4><ul>{shownGaps(job.relevance.gaps).map((gap, index) => <li key={index}>{gap}</li>)}</ul></>}</div>}
           <p className="discovery-provenance">Source: {job.source}. Retrieved {date(job.fetched_at)}{job.source_published_at ? ` · Source publication: ${date(job.source_published_at)}` : ""}{job.source_updated_at ? ` · Source update: ${date(job.source_updated_at)}` : ""}. A posting may close after retrieval.</p>
+          <SponsorshipEvidence description={job.description} sourceUrl={job.source_url} truncated={job.content_truncated} />
           <details><summary>Review posting and provisional reasons</summary><p className="discovery-description">{job.description}</p><h4>Why it appeared</h4><ul>{job.match_reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul><h4>Review before applying</h4><ul>{job.eligibility.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul></details>
           {job.content_truncated && <p className="beta-notice">Posting text is truncated. Review the original and complete the description in Application Studio before preparation.</p>}
           <div className="workflow-actions"><a className="discovery-source-link" href={safePostingUrl(job.source_url)!} target="_blank" rel="noreferrer">View source posting ↗</a>{savedJob ? <button className="beta-secondary" disabled={busy || Boolean(saving)} onClick={() => onOpenStudio(savedJob)}>Open saved role</button> : <button className="beta-secondary" disabled={busy || Boolean(saving) || uncertainSaves.has(job.source_id)} onClick={() => void save(job)}>{saving === job.source_id ? "Saving role…" : "Save role"}</button>}</div>

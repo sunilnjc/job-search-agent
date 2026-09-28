@@ -631,16 +631,24 @@ def _remote_scope(job: dict) -> dict:
 
 def _sponsorship_signal(job: dict) -> str:
     positive, negative, conditional = False, False, False
+    authorization_required = False
     for clause in re.split(r"[\n.!?;]+", job["description"]):
         if not re.search(r"sponsor|visa|work permit|authori[sz]", clause, re.I) or INSTRUCTIONS.search(clause):
             continue
-        negative |= bool(re.search(
+        authorization_required |= bool(re.search(r"\bmust\s+(?:already\s+)?(?:be\s+)?authori[sz]ed to work", clause, re.I))
+        # Existing work authorization is not, by itself, a refusal to support
+        # a future employer change. Require actual sponsorship wording before
+        # classifying the clause as a sponsorship restriction.
+        negative |= bool(re.search(r"sponsor", clause, re.I)) and bool(re.search(
             r"\b(?:no|without)\s+(?:(?:visa|immigration|work permit)\s+)?sponsorship\b|\b(?:cannot|can't|do not|does not|don't|will not|won't|unable to|not able to)\s+(?:offer |provide |support )?(?:(?:visa|immigration|work permit) )?sponsor|\bsponsorship\s+(?:is\s+)?(?:not available|not offered|unavailable)|\bmust\s+(?:already\s+)?(?:be\s+)?authori[sz]ed to work", clause, re.I))
         offered = bool(re.search(
             r"\b(?:visa|immigration|work permit)\s+sponsorship\s+(?:is\s+)?(?:available|provided|offered|supported)|\b(?:offer|provide|support|provides|offers)\s+(?:visa|immigration|work permit)\s+sponsorship|\b(?:will|can)\s+sponsor\s+(?:a\s+)?(?:work\s+)?visas?\b", clause, re.I))
         uncertain = bool(re.search(r"\b(?:may|might|possibly|potentially|conditional|eligible|certain|qualifying|depending|depends|case.by.case|not|no|without|cannot|can't|won't|unable)\b", clause, re.I))
         positive |= offered and not uncertain
         conditional |= offered and uncertain
+    # An authorization requirement is not a refusal, but also prevents an
+    # apparently positive clause from passing the strict unconditional filter.
+    conditional |= positive and authorization_required
     return "conflicting" if negative and positive else "restricted" if negative else "offered" if positive and not conditional else "conditional" if conditional else "unknown"
 
 
