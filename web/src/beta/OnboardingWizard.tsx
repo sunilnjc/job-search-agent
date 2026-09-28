@@ -8,6 +8,7 @@ import { MobileApiError, validateResume } from "./mobileTransport";
 import { clearDraft, draftStorage, readDraft, saveDraft } from "./onboardingDraft";
 import type { OnboardingDraft, WizardFields } from "./onboardingDraft";
 import { countryName, remoteCountries } from "./countries";
+import { usSponsorshipPreferences } from "./sponsorshipEvidence";
 
 type Props = { session: Session; profile: BetaProfile | null; preferences: JobPreferences | null; onComplete: () => Promise<void> };
 const STEPS = ["Basics", "Target roles", "Eligibility", "Resume", "Review"];
@@ -155,12 +156,20 @@ export function OnboardingWizard({ session, profile, preferences, onComplete }: 
           <p>Structured qualifications saved on mobile are preserved. This editor changes only career text.</p>
         </div>}
         {draft.step === 1 && <div className="beta-onboarding-fields">
+          <details><summary>Looking for a US role with employer sponsorship support?</summary>
+            <p>Optional pilot search setup, including candidates exploring an H-1B employer change. This sets the search location to United States, clears other regions, sets remote country to US and marks sponsorship needed. Your roles, workplace preference, strict-filter choices and work-rights notes stay unchanged. It does not record or infer your visa status or current residence.</p>
+            <button type="button" className="beta-secondary" onClick={() => {
+              setDraft(current => ({ ...current, fields: usSponsorshipPreferences(current.fields) }));
+              setNotice("US sponsorship search preferences selected. Review the fields and Eligibility step before saving.");
+            }}>Use US sponsorship search preferences</button>
+          </details>
           <p>These preferences guide configured public-board discovery and role assessment. Coverage is limited to the operator’s selected boards, not the whole market. Manual posting links are not automatically fetched.</p>
           <label>Target roles <span>Comma-separated</span><input required value={fields.targetTitles} onChange={event => update("targetTitles", event.target.value)} /></label>
           <label>Preferred countries or cities<input value={fields.preferredLocations} onChange={event => update("preferredLocations", event.target.value)} /></label>
           <label>Preferred regions<input value={fields.preferredRegions} onChange={event => update("preferredRegions", event.target.value)} /></label>
         </div>}
         {draft.step === 2 && <div className="beta-onboarding-fields">
+          <p>For an H-1B employer-change search, describe only the support you need in the optional notes. Do not enter passport numbers, immigration receipt numbers or upload visa documents. Current work authorization does not by itself establish support from a new employer. This product is not an immigration advisory service.</p>
           <p>These preferences do not confirm work rights for any job. Review eligibility separately in each role’s Studio.</p>
           <label>Work preference<select value={fields.remotePreference} onChange={event => update("remotePreference", event.target.value as WizardFields["remotePreference"])}><option value="open">Open to remote, hybrid, or on-site</option><option value="remote_only">Remote only</option><option value="hybrid">Hybrid</option><option value="onsite">On-site</option></select></label>
           <label className="beta-onboarding-checkbox"><input type="checkbox" checked={fields.sponsorshipRequired} onChange={event => update("sponsorshipRequired", event.target.checked)} /><span>I need visa sponsorship for relocation.</span></label>
